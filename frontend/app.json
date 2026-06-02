@@ -47,7 +47,8 @@
         {
           "microphonePermission": "Record voice notes to transcribe into text"
         }
-      ]
+      ],
+      "expo-font"
     ],
     "experiments": {
       "typedRoutes": true
