@@ -37,3 +37,6 @@ yarn-error.*
 *.tsbuildinfo
 
 app-example
+
+# Metro build cache — large, and inlines EXPO_PUBLIC_* secrets
+.metro-cache/

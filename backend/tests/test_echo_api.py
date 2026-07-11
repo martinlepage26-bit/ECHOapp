@@ -80,7 +80,7 @@ class TestTTS:
     def test_tts_invalid_voice_fallback(self, s):
         r = s.post(f"{API}/tts/generate", json={"text": "Quick check.", "voice_id": "nope"}, timeout=60)
         assert r.status_code == 200
-        assert r.json()["voice_id"] == "alloy"
+        assert r.json()["voice_id"] == "echo"
 
 
 # ---------------- Parse file ----------------

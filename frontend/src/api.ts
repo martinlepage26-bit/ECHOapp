@@ -1,4 +1,8 @@
-const BASE = process.env.EXPO_PUBLIC_BACKEND_URL;
+import { Platform } from 'react-native';
+
+// Empty means same-origin: the backend serves this bundle, so `/api` resolves against
+// whatever host the page was loaded from. That keeps one URL and sidesteps CORS entirely.
+const BASE = process.env.EXPO_PUBLIC_BACKEND_URL ?? '';
 export const API_BASE = `${BASE}/api`;
 
 export type Voice = { id: string; name: string; tag: string };
@@ -37,8 +41,26 @@ export type ParseFileResponse = {
   char_count: number;
 };
 
+type UploadPayload = {
+  uri: string;
+  filename: string;
+  mime: string;
+  webFile?: Blob | File | null;
+};
+
+// Shared secret for the metered endpoints (TTS/STT/parse-file). Empty in local dev, where
+// the backend leaves the gate open; required once the API is on a public URL.
+const ECHO_KEY = process.env.EXPO_PUBLIC_ECHO_KEY ?? '';
+
+export function authHeaders(extra?: Record<string, string>): Record<string, string> {
+  return ECHO_KEY ? { ...(extra ?? {}), 'X-Echo-Key': ECHO_KEY } : { ...(extra ?? {}) };
+}
+
 async function jfetch<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, init);
+  const res = await fetch(`${API_BASE}${path}`, {
+    ...init,
+    headers: authHeaders(init?.headers as Record<string, string> | undefined),
+  });
   if (!res.ok) {
     let detail = `HTTP ${res.status}`;
     try {
@@ -48,6 +70,30 @@ async function jfetch<T>(path: string, init?: RequestInit): Promise<T> {
     throw new Error(typeof detail === 'string' ? detail : JSON.stringify(detail));
   }
   return (await res.json()) as T;
+}
+
+async function buildUploadForm(field: string, payload: UploadPayload): Promise<FormData> {
+  const form = new FormData();
+  if (Platform.OS === 'web') {
+    const blob = payload.webFile ?? (await fetchBlobFromUri(payload.uri));
+    form.append(field, blob, payload.filename);
+    return form;
+  }
+
+  form.append(
+    field,
+    // React Native uses a different FormData file shape than browsers.
+    { uri: payload.uri, name: payload.filename, type: payload.mime } as any
+  );
+  return form;
+}
+
+async function fetchBlobFromUri(uri: string): Promise<Blob> {
+  const res = await fetch(uri);
+  if (!res.ok) {
+    throw new Error(`Could not read local file for upload (HTTP ${res.status}).`);
+  }
+  return await res.blob();
 }
 
 export const api = {
@@ -61,11 +107,13 @@ export const api = {
       body: JSON.stringify({ text, voice_id, speed }),
     }),
 
-  transcribe: async (uri: string, filename: string, mime: string) => {
-    const form = new FormData();
-    // @ts-ignore — React Native FormData file shape
-    form.append('audio', { uri, name: filename, type: mime });
-    const res = await fetch(`${API_BASE}/stt/transcribe`, { method: 'POST', body: form });
+  transcribe: async (uri: string, filename: string, mime: string, webFile?: Blob | File | null) => {
+    const form = await buildUploadForm('audio', { uri, filename, mime, webFile });
+    const res = await fetch(`${API_BASE}/stt/transcribe`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: form,
+    });
     if (!res.ok) {
       let detail = `HTTP ${res.status}`;
       try {
@@ -91,11 +139,13 @@ export const api = {
   deleteTranscript: (id: string) =>
     jfetch<{ deleted: number; id: string }>(`/transcripts/${id}`, { method: 'DELETE' }),
 
-  parseFile: async (uri: string, filename: string, mime: string) => {
-    const form = new FormData();
-    // @ts-ignore
-    form.append('file', { uri, name: filename, type: mime });
-    const res = await fetch(`${API_BASE}/parse-file`, { method: 'POST', body: form });
+  parseFile: async (uri: string, filename: string, mime: string, webFile?: Blob | File | null) => {
+    const form = await buildUploadForm('file', { uri, filename, mime, webFile });
+    const res = await fetch(`${API_BASE}/parse-file`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: form,
+    });
     if (!res.ok) {
       let detail = `HTTP ${res.status}`;
       try {

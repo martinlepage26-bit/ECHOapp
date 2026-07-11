@@ -11,7 +11,6 @@ import {
   Platform,
   Keyboard,
   TouchableWithoutFeedback,
-  Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from 'expo-router';
@@ -48,31 +47,102 @@ const h = {
 };
 
 export default function ReadbackScreen() {
+  const isWeb = Platform.OS === 'web';
   const [text, setText] = useState('');
   const [voices, setVoices] = useState<Voice[]>([]);
-  const [voiceId, setVoiceId] = useState<string>('alloy');
+  const [voiceId, setVoiceId] = useState<string>('echo');
   const [speed, setSpeed] = useState<number>(1.0);
   const [loading, setLoading] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [filename, setFilename] = useState<string | null>(null);
+  const [playbackHint, setPlaybackHint] = useState<string | null>(null);
   const [saveHint, setSaveHint] = useState<string | null>(null);
 
   const [audioUri, setAudioUri] = useState<string | null>(null);
   const [words, setWords] = useState<WordTiming[]>([]);
+  const [estimatedDuration, setEstimatedDuration] = useState(0);
   const [activeIdx, setActiveIdx] = useState<number>(-1);
+  const [webIsPlaying, setWebIsPlaying] = useState(false);
+  const [webPositionMs, setWebPositionMs] = useState(0);
+  const [webDurationMs, setWebDurationMs] = useState(0);
 
-  const player: AudioPlayer = useAudioPlayer(audioUri ? { uri: audioUri } : null, 80);
+  const player: AudioPlayer = useAudioPlayer(
+    !isWeb && audioUri ? { uri: audioUri } : null,
+    { updateInterval: 80 }
+  );
   const status: AudioStatus = useAudioPlayerStatus(player);
-  const isPlaying = !!status?.playing;
-  const positionMs = Math.max(0, Math.round((status?.currentTime ?? 0) * 1000));
-  const durationMs = Math.max(0, Math.round((status?.duration ?? 0) * 1000));
+  const isPlaying = isWeb ? webIsPlaying : !!status?.playing;
+  const positionMs = isWeb
+    ? webPositionMs
+    : Math.max(0, Math.round((status?.currentTime ?? 0) * 1000));
+  const durationMs = isWeb
+    ? webDurationMs
+    : Math.max(0, Math.round((status?.duration ?? 0) * 1000));
+  const displayWords = useMemo(
+    () => scaleWordTimings(words, estimatedDuration, durationMs),
+    [words, estimatedDuration, durationMs]
+  );
 
   const wordsRef = useRef<WordTiming[]>([]);
-  wordsRef.current = words;
+  wordsRef.current = displayWords;
   const lastActiveRef = useRef<number>(-1);
+  const audioObjectUrlRef = useRef<string | null>(null);
+  const shouldAutoplayRef = useRef(false);
+  const webAudioRef = useRef<HTMLAudioElement | null>(null);
+  const webLoadedUriRef = useRef<string | null>(null);
+  const webReplayGuardUntilRef = useRef(0);
+  const rafRef = useRef<number | null>(null);
 
   const { words: wc, chars: cc, mins } = wordAndCharCount(text);
+
+  const revokeObjectUrl = useCallback(() => {
+    if (Platform.OS === 'web' && audioObjectUrlRef.current) {
+      URL.revokeObjectURL(audioObjectUrlRef.current);
+      audioObjectUrlRef.current = null;
+    }
+  }, []);
+
+  const pauseCurrentAudio = useCallback(() => {
+    if (isWeb) {
+      webAudioRef.current?.pause();
+      return;
+    }
+    player.pause();
+  }, [isWeb, player]);
+
+  const seekToStart = useCallback(() => {
+    if (isWeb) {
+      if (webAudioRef.current) {
+        webAudioRef.current.currentTime = 0;
+      }
+      setWebPositionMs(0);
+      return;
+    }
+    player.seekTo(0);
+  }, [isWeb, player]);
+
+  const resetAudio = useCallback(() => {
+    shouldAutoplayRef.current = false;
+    try {
+      pauseCurrentAudio();
+    } catch {}
+    if (isWeb && webAudioRef.current) {
+      webAudioRef.current.removeAttribute('src');
+      webAudioRef.current.load();
+      webLoadedUriRef.current = null;
+      setWebIsPlaying(false);
+      setWebPositionMs(0);
+      setWebDurationMs(0);
+    }
+    revokeObjectUrl();
+    setAudioUri(null);
+    setWords([]);
+    setEstimatedDuration(0);
+    setPlaybackHint(null);
+    setActiveIdx(-1);
+    lastActiveRef.current = -1;
+  }, [isWeb, pauseCurrentAudio, revokeObjectUrl]);
 
   // ------------------------ Voices + audio mode
   useEffect(() => {
@@ -89,6 +159,94 @@ export default function ReadbackScreen() {
       } catch {}
     })();
   }, []);
+
+  useEffect(() => {
+    if (!isWeb) return;
+
+    const audio = new Audio();
+    audio.preload = 'auto';
+    webAudioRef.current = audio;
+
+    const stopRaf = () => {
+      if (rafRef.current != null) {
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+      }
+    };
+
+    const syncPosition = () => {
+      setWebPositionMs(Math.max(0, Math.round((audio.currentTime || 0) * 1000)));
+      setWebDurationMs(Number.isFinite(audio.duration) ? Math.max(0, Math.round(audio.duration * 1000)) : 0);
+      if (!audio.paused && !audio.ended) {
+        rafRef.current = requestAnimationFrame(syncPosition);
+      } else {
+        rafRef.current = null;
+      }
+    };
+
+    const handlePlay = () => {
+      setWebIsPlaying(true);
+      syncPosition();
+    };
+    const handlePause = () => {
+      stopRaf();
+      setWebIsPlaying(false);
+      setWebPositionMs(Math.max(0, Math.round((audio.currentTime || 0) * 1000)));
+    };
+    const handleLoadedMetadata = () => {
+      setWebDurationMs(Number.isFinite(audio.duration) ? Math.round(audio.duration * 1000) : 0);
+    };
+    const handleEnded = () => {
+      stopRaf();
+      setWebIsPlaying(false);
+      setWebPositionMs(Number.isFinite(audio.duration) ? Math.round(audio.duration * 1000) : 0);
+      setActiveIdx(-1);
+      lastActiveRef.current = -1;
+      h.light();
+    };
+
+    audio.addEventListener('play', handlePlay);
+    audio.addEventListener('pause', handlePause);
+    audio.addEventListener('loadedmetadata', handleLoadedMetadata);
+    audio.addEventListener('ended', handleEnded);
+
+    return () => {
+      stopRaf();
+      audio.pause();
+      audio.removeAttribute('src');
+      audio.load();
+      audio.removeEventListener('play', handlePlay);
+      audio.removeEventListener('pause', handlePause);
+      audio.removeEventListener('loadedmetadata', handleLoadedMetadata);
+      audio.removeEventListener('ended', handleEnded);
+      webAudioRef.current = null;
+    };
+  }, [isWeb]);
+
+  useEffect(() => {
+    return () => {
+      revokeObjectUrl();
+    };
+  }, [revokeObjectUrl]);
+
+  useEffect(() => {
+    if (!isWeb || !webAudioRef.current) return;
+
+    const audio = webAudioRef.current;
+    if (!audioUri) {
+      audio.pause();
+      audio.removeAttribute('src');
+      audio.load();
+      webLoadedUriRef.current = null;
+      setWebIsPlaying(false);
+      setWebPositionMs(0);
+      setWebDurationMs(0);
+      return;
+    }
+
+    setWebPositionMs(0);
+    setWebDurationMs(0);
+  }, [audioUri, isWeb]);
 
   // Load pending draft from Library on focus
   useFocusEffect(
@@ -124,7 +282,6 @@ export default function ReadbackScreen() {
     if (idx !== lastActiveRef.current) {
       lastActiveRef.current = idx;
       setActiveIdx(idx);
-      // haptic on sentence-ending punctuation only (avoid spam)
       if (isPlaying && idx >= 0) {
         const w = ws[idx].word;
         if (w && /[.!?,;:]$/.test(w)) h.select();
@@ -132,25 +289,91 @@ export default function ReadbackScreen() {
     }
   }, [positionMs, audioUri, isPlaying]);
 
-  // When playback finishes
   useEffect(() => {
+    if (isWeb) return;
     if (status?.didJustFinish) {
       setActiveIdx(-1);
       lastActiveRef.current = -1;
       h.light();
     }
-  }, [status?.didJustFinish]);
+  }, [isWeb, status?.didJustFinish]);
 
   // ------------------------ Helpers
-  const resetAudio = useCallback(() => {
-    try {
-      player.pause();
-    } catch {}
-    setAudioUri(null);
-    setWords([]);
-    setActiveIdx(-1);
-    lastActiveRef.current = -1;
-  }, [player]);
+  const makePlayableAudioUri = useCallback(
+    (audioBase64: string, mime: string) => {
+      revokeObjectUrl();
+      return `data:${mime};base64,${audioBase64}`;
+    },
+    [revokeObjectUrl]
+  );
+
+  const prepareWebAudio = useCallback(async () => {
+    if (!audioUri || !webAudioRef.current) {
+      throw new Error('Audio is not ready yet.');
+    }
+    if (webLoadedUriRef.current === audioUri) {
+      return;
+    }
+
+    const audio = webAudioRef.current;
+    await new Promise<void>((resolve, reject) => {
+      const onLoaded = () => {
+        cleanup();
+        webLoadedUriRef.current = audioUri;
+        resolve();
+      };
+      const onError = () => {
+        cleanup();
+        reject(new Error('Audio could not be prepared in this browser.'));
+      };
+      const cleanup = () => {
+        audio.removeEventListener('loadedmetadata', onLoaded);
+        audio.removeEventListener('error', onError);
+      };
+
+      audio.pause();
+      audio.currentTime = 0;
+      audio.autoplay = false;
+      audio.addEventListener('loadedmetadata', onLoaded);
+      audio.addEventListener('error', onError);
+      audio.src = audioUri;
+      audio.load();
+    });
+  }, [audioUri]);
+
+  const playCurrentAudio = useCallback(
+    async (blockedMessage: string) => {
+      try {
+        if (isWeb) {
+          if (!webAudioRef.current) {
+            throw new Error('Browser audio engine is unavailable.');
+          }
+          await prepareWebAudio();
+          await webAudioRef.current.play();
+        } else {
+          await Promise.resolve(player.play());
+        }
+        setPlaybackHint(null);
+        h.medium();
+        return true;
+      } catch (e) {
+        setError(formatPlaybackError(e, blockedMessage));
+        return false;
+      }
+    },
+    [isWeb, player, prepareWebAudio]
+  );
+
+  useEffect(() => {
+    if (isWeb || !audioUri || !shouldAutoplayRef.current) return;
+    shouldAutoplayRef.current = false;
+
+    const timer = setTimeout(() => {
+      void playCurrentAudio('Audio is ready. Press PLAY again to start playback in this browser.');
+    }, 120);
+
+    return () => clearTimeout(timer);
+  }, [audioUri, isWeb, playCurrentAudio]);
 
   // ------------------------ Actions
   const onLoadSample = useCallback(async () => {
@@ -171,6 +394,7 @@ export default function ReadbackScreen() {
     setText('');
     setFilename(null);
     setError(null);
+    setPlaybackHint(null);
     setSaveHint(null);
     resetAudio();
   }, [resetAudio]);
@@ -204,7 +428,8 @@ export default function ReadbackScreen() {
       const parsed = await api.parseFile(
         a.uri,
         a.name || 'file',
-        a.mimeType || 'application/octet-stream'
+        a.mimeType || 'application/octet-stream',
+        a.file ?? null
       );
       setText(parsed.text || '');
       resetAudio();
@@ -223,54 +448,87 @@ export default function ReadbackScreen() {
       setError('Paste text or import a file first.');
       return;
     }
-    // If audio already generated, toggle play/pause
     if (audioUri) {
       try {
+        if (isWeb && Date.now() < webReplayGuardUntilRef.current) {
+          setPlaybackHint('Audio ready. Press PLAY to start readback.');
+          return;
+        }
         if (isPlaying) {
-          player.pause();
+          pauseCurrentAudio();
+          setPlaybackHint(null);
           h.light();
         } else {
-          player.play();
-          h.medium();
+          if (durationMs > 0 && positionMs >= durationMs - 120) {
+            seekToStart();
+          }
+          await playCurrentAudio('Playback failed. Press PLAY again, or reload if the browser keeps blocking audio.');
         }
-      } catch {}
+      } catch (e) {
+        setError(formatPlaybackError(e, 'Playback failed.'));
+      }
       return;
     }
     try {
-      setGenerating(true);
+      if (!isWeb) {
+        setGenerating(true);
+      }
       h.light();
       const r = await api.generateTTS(t, voiceId, speed);
       setWords(r.words);
+      setEstimatedDuration(r.estimated_duration);
       setActiveIdx(-1);
       lastActiveRef.current = -1;
-      const uri = `data:${r.mime};base64,${r.audio_base64}`;
+      const uri = makePlayableAudioUri(r.audio_base64, r.mime);
       setAudioUri(uri);
-      // Start playback shortly after source becomes available
-      setTimeout(() => {
-        try {
-          player.play();
-          h.medium();
-        } catch {}
-      }, 120);
+      if (isWeb) {
+        webReplayGuardUntilRef.current = Date.now() + 400;
+        setPlaybackHint('Audio ready. Press PLAY to start readback.');
+      } else {
+        shouldAutoplayRef.current = true;
+      }
     } catch (e: any) {
       setError(e?.message || 'Readback failed');
     } finally {
-      setGenerating(false);
+      if (!isWeb) {
+        setGenerating(false);
+      }
     }
-  }, [text, voiceId, speed, audioUri, isPlaying, player]);
+  }, [
+    isWeb,
+    text,
+    audioUri,
+    isPlaying,
+    durationMs,
+    positionMs,
+    voiceId,
+    speed,
+    makePlayableAudioUri,
+    pauseCurrentAudio,
+    playCurrentAudio,
+    seekToStart,
+  ]);
 
   const onStop = useCallback(() => {
     h.medium();
+    shouldAutoplayRef.current = false;
     try {
-      player.pause();
-      player.seekTo(0);
+      pauseCurrentAudio();
+      seekToStart();
     } catch {}
-    setActiveIdx(-1);
-    lastActiveRef.current = -1;
-    // Also discard generated audio so next PLAY regenerates with latest text/voice/speed
+    revokeObjectUrl();
     setAudioUri(null);
     setWords([]);
-  }, [player]);
+    setEstimatedDuration(0);
+    setPlaybackHint(null);
+    setActiveIdx(-1);
+    lastActiveRef.current = -1;
+    if (isWeb) {
+      setWebIsPlaying(false);
+      setWebPositionMs(0);
+      setWebDurationMs(0);
+    }
+  }, [isWeb, pauseCurrentAudio, revokeObjectUrl, seekToStart]);
 
   const onSaveDraft = useCallback(async () => {
     const t = text.trim();
@@ -292,7 +550,6 @@ export default function ReadbackScreen() {
     }
   }, [text, filename]);
 
-  // When text, voice, or speed changes, invalidate existing audio
   useEffect(() => {
     if (audioUri) {
       resetAudio();
@@ -304,16 +561,16 @@ export default function ReadbackScreen() {
   const selectedVoice = voices.find((v) => v.id === voiceId);
 
   const readbackContent = useMemo(() => {
-    if (!words.length) {
+    if (!displayWords.length) {
       return (
         <Text style={styles.readbackPlaceholder}>
-          {text ? 'Press PLAY to begin readback with live word tracking.' : '> awaiting draft input'}
+          {text ? 'Press PLAY to begin natural readback with live word tracking.' : '> awaiting draft input'}
         </Text>
       );
     }
     return (
       <Text style={styles.readbackBody}>
-        {words.map((w, i) => (
+        {displayWords.map((w, i) => (
           <Text
             key={`${w.index}-${i}`}
             style={[
@@ -327,7 +584,7 @@ export default function ReadbackScreen() {
         ))}
       </Text>
     );
-  }, [words, activeIdx, text]);
+  }, [activeIdx, displayWords, text]);
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
@@ -337,7 +594,6 @@ export default function ReadbackScreen() {
       >
         <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
           <View style={styles.flex}>
-            {/* Header */}
             <View style={styles.header} testID="readback-header">
               <View style={styles.headerRow}>
                 <Text style={styles.logo}>ECHO</Text>
@@ -360,7 +616,6 @@ export default function ReadbackScreen() {
               keyboardShouldPersistTaps="handled"
               showsVerticalScrollIndicator={false}
             >
-              {/* Draft intake panel */}
               <View style={styles.panel} testID="draft-intake-panel">
                 <View style={styles.panelHeader}>
                   <Text style={styles.caption}>Draft Intake</Text>
@@ -417,8 +672,8 @@ export default function ReadbackScreen() {
                   <Text style={styles.miniLabel}>Text Body</Text>
                   <TextInput
                     value={text}
-                    onChangeText={(v) => {
-                      setText(v);
+                    onChangeText={(value) => {
+                      setText(value);
                       if (audioUri) resetAudio();
                     }}
                     multiline
@@ -436,15 +691,25 @@ export default function ReadbackScreen() {
                   <StatCell label="Est" value={`${mins} min`} />
                 </View>
 
+                <Text style={styles.cleanupHint}>
+                  Readback automatically strips markdown markers like headings and list dashes.
+                </Text>
+
                 {saveHint ? (
                   <View style={styles.saveToast} testID="save-toast">
                     <Ionicons name="checkmark-circle" size={12} color={colors.emerald} />
                     <Text style={styles.saveToastTxt}>{saveHint}</Text>
                   </View>
                 ) : null}
+
+                {playbackHint ? (
+                  <View style={styles.playbackHint} testID="playback-hint">
+                    <Ionicons name="play-circle-outline" size={12} color={colors.amber} />
+                    <Text style={styles.playbackHintTxt}>{playbackHint}</Text>
+                  </View>
+                ) : null}
               </View>
 
-              {/* Voice picker */}
               <View style={styles.panelLite}>
                 <View style={styles.panelHeader}>
                   <Text style={styles.caption}>Voice Profile</Text>
@@ -457,20 +722,20 @@ export default function ReadbackScreen() {
                   showsHorizontalScrollIndicator={false}
                   contentContainerStyle={styles.voiceRow}
                 >
-                  {voices.map((v) => {
-                    const active = v.id === voiceId;
+                  {voices.map((voice) => {
+                    const active = voice.id === voiceId;
                     return (
                       <TouchableOpacity
-                        key={v.id}
+                        key={voice.id}
                         onPress={() => {
                           h.select();
-                          setVoiceId(v.id);
+                          setVoiceId(voice.id);
                         }}
                         style={[styles.voiceChip, active && styles.voiceChipActive]}
-                        testID={`voice-chip-${v.id}`}
+                        testID={`voice-chip-${voice.id}`}
                       >
                         <Text style={[styles.voiceChipTxt, active && styles.voiceChipTxtActive]}>
-                          {v.name}
+                          {voice.name}
                         </Text>
                       </TouchableOpacity>
                     );
@@ -478,23 +743,22 @@ export default function ReadbackScreen() {
                 </ScrollView>
               </View>
 
-              {/* Transport */}
               <View style={styles.transport} testID="transport-panel">
                 <View style={styles.transportTop}>
                   <Text style={styles.caption}>Transport</Text>
                   <View style={styles.speedRow}>
-                    {[0.75, 1.0, 1.25, 1.5].map((s) => (
+                    {[0.75, 1.0, 1.25, 1.5].map((value) => (
                       <TouchableOpacity
-                        key={s}
+                        key={value}
                         onPress={() => {
                           h.select();
-                          setSpeed(s);
+                          setSpeed(value);
                         }}
-                        style={[styles.speedChip, speed === s && styles.speedChipActive]}
-                        testID={`speed-${s}`}
+                        style={[styles.speedChip, speed === value && styles.speedChipActive]}
+                        testID={`speed-${value}`}
                       >
-                        <Text style={[styles.speedTxt, speed === s && styles.speedTxtActive]}>
-                          {s}x
+                        <Text style={[styles.speedTxt, speed === value && styles.speedTxtActive]}>
+                          {value}x
                         </Text>
                       </TouchableOpacity>
                     ))}
@@ -525,15 +789,11 @@ export default function ReadbackScreen() {
                     style={[styles.playBtn, generating && { opacity: 0.7 }]}
                     testID="play-pause-button"
                   >
-                    {generating ? (
-                      <ActivityIndicator color={colors.bg} />
-                    ) : (
-                      <Ionicons
-                        name={isPlaying ? 'pause' : 'play'}
-                        size={22}
-                        color={colors.bg}
-                      />
-                    )}
+                    <Ionicons
+                      name={generating ? 'sync-outline' : isPlaying ? 'pause' : 'play'}
+                      size={22}
+                      color={colors.bg}
+                    />
                   </TouchableOpacity>
                   <View style={styles.iconBtn}>
                     <Text style={styles.voiceShort}>
@@ -543,14 +803,13 @@ export default function ReadbackScreen() {
                 </View>
               </View>
 
-              {/* Live readback pane */}
               <View style={styles.readbackPanel} testID="readback-pane">
                 <View style={styles.panelHeader}>
                   <Text style={styles.caption}>Live Readback</Text>
                   <View style={styles.pillSmall}>
                     <View style={[styles.pillDot, isPlaying && { backgroundColor: colors.amber }]} />
                     <Text style={styles.pillTxt}>
-                      {isPlaying ? 'TRACKING' : words.length ? 'PAUSED' : 'IDLE'}
+                      {isPlaying ? 'TRACKING' : displayWords.length ? 'PAUSED' : 'IDLE'}
                     </Text>
                   </View>
                 </View>
@@ -587,6 +846,29 @@ function fmt(ms: number) {
   const m = Math.floor(s / 60);
   const ss = s % 60;
   return `${String(m).padStart(2, '0')}:${String(ss).padStart(2, '0')}`;
+}
+
+function formatPlaybackError(error: unknown, fallback: string) {
+  const message = error instanceof Error ? error.message : String(error || '');
+  if (/NotAllowedError|user gesture|autoplay/i.test(message)) {
+    return fallback;
+  }
+  return message || fallback;
+}
+
+function scaleWordTimings(words: WordTiming[], estimatedDuration: number, actualDurationMs: number) {
+  if (!words.length) return words;
+  const actualDuration = actualDurationMs > 0 ? actualDurationMs / 1000 : 0;
+  if (!estimatedDuration || !actualDuration) return words;
+
+  const scale = actualDuration / estimatedDuration;
+  if (!isFinite(scale) || Math.abs(scale - 1) < 0.04) return words;
+
+  return words.map((word) => ({
+    ...word,
+    start: Number((word.start * scale).toFixed(3)),
+    end: Number((word.end * scale).toFixed(3)),
+  }));
 }
 
 const styles = StyleSheet.create({
@@ -682,6 +964,13 @@ const styles = StyleSheet.create({
     flexDirection: 'row', marginTop: 12, borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: colors.border, paddingTop: 10,
   },
+  cleanupHint: {
+    marginTop: 8,
+    fontFamily: sans,
+    fontSize: 12.5,
+    lineHeight: 18,
+    color: colors.textMuted,
+  },
   statCell: { flex: 1 },
   statLabel: {
     fontFamily: mono, fontSize: 9.5, letterSpacing: 2, color: colors.textMuted,
@@ -696,6 +985,14 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(74,222,128,0.06)', borderLeftWidth: 2, borderLeftColor: colors.emerald,
   },
   saveToastTxt: { fontFamily: mono, fontSize: 11, letterSpacing: 1.4, color: colors.emerald },
+  playbackHint: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    marginTop: 10, paddingHorizontal: 10, paddingVertical: 7,
+    backgroundColor: colors.amberFaint, borderLeftWidth: 2, borderLeftColor: colors.amber,
+  },
+  playbackHintTxt: {
+    fontFamily: mono, fontSize: 11, letterSpacing: 1.2, color: colors.amber,
+  },
 
   voiceRow: { gap: 8, paddingRight: 8 },
   voiceChip: {

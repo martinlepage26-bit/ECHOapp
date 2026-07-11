@@ -1,23 +1,22 @@
-import base64
 import io
 import logging
 import os
 import uuid
 from datetime import datetime, timezone
+from hmac import compare_digest
 from pathlib import Path
 from typing import List, Optional
 
 from dotenv import load_dotenv
-from fastapi import APIRouter, FastAPI, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, FastAPI, File, Header, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, Field
 from starlette.middleware.cors import CORSMiddleware
 
-from emergentintegrations.llm.openai import (
-    OpenAISpeechToText,
-    OpenAITextToSpeech,
-)
+from speech_providers import SpeechUnavailable, get_provider
+from speech_text import estimate_word_timings, normalize_tts_text
 
 # ------------------------------------------------------------------------------
 # Setup
@@ -32,36 +31,46 @@ logging.basicConfig(
 )
 logger = logging.getLogger("echo")
 
-# Mongo
-mongo_url = os.environ["MONGO_URL"]
-mongo_client = AsyncIOMotorClient(mongo_url)
-db = mongo_client[os.environ["DB_NAME"]]
+# Mongo — resolved lazily. Reading MONGO_URL at import time meant a missing var killed the
+# whole app, including the endpoints that need no database at all.
+_mongo_client: Optional[AsyncIOMotorClient] = None
 
-# LLM key
-EMERGENT_LLM_KEY = os.environ.get("EMERGENT_LLM_KEY")
 
-# TTS & STT clients (emergentintegrations)
-tts_client = OpenAITextToSpeech(api_key=EMERGENT_LLM_KEY)
-stt_client = OpenAISpeechToText(api_key=EMERGENT_LLM_KEY)
+def get_db():
+    global _mongo_client
+    mongo_url = os.environ.get("MONGO_URL")
+    db_name = os.environ.get("DB_NAME")
+    if not mongo_url or not db_name:
+        raise HTTPException(
+            status_code=503,
+            detail="Storage unavailable: MONGO_URL and DB_NAME are not configured.",
+        )
+    if _mongo_client is None:
+        _mongo_client = AsyncIOMotorClient(mongo_url)
+    return _mongo_client[db_name]
+
+
+# Shared-secret gate. TTS and STT spend metered vendor credits per call, so on any public
+# URL they must not be open to drive-by traffic. Enforced only when ECHO_API_KEY is set;
+# local development without it stays frictionless, but a public deploy must set it.
+ECHO_API_KEY = os.environ.get("ECHO_API_KEY") or ""
+
+if not ECHO_API_KEY:
+    logger.warning(
+        "ECHO_API_KEY is not set: the metered TTS/STT endpoints are UNPROTECTED. "
+        "Set it before exposing this server on a public URL."
+    )
+
+
+async def require_api_key(x_echo_key: str = Header(default="")) -> None:
+    if not ECHO_API_KEY:
+        return
+    if not compare_digest(x_echo_key, ECHO_API_KEY):
+        raise HTTPException(status_code=401, detail="Invalid or missing X-Echo-Key.")
+
 
 app = FastAPI(title="ECHO Backend")
 api_router = APIRouter(prefix="/api")
-
-# ------------------------------------------------------------------------------
-# Curated voice catalog (OpenAI TTS voices)
-# ------------------------------------------------------------------------------
-
-VOICES = [
-    {"id": "alloy", "name": "Alloy", "tag": "neutral · balanced"},
-    {"id": "ash", "name": "Ash", "tag": "clear · articulate"},
-    {"id": "coral", "name": "Coral", "tag": "warm · friendly"},
-    {"id": "echo", "name": "Echo", "tag": "smooth · calm"},
-    {"id": "fable", "name": "Fable", "tag": "expressive · storyteller"},
-    {"id": "nova", "name": "Nova", "tag": "energetic · upbeat"},
-    {"id": "onyx", "name": "Onyx", "tag": "deep · authoritative"},
-    {"id": "sage", "name": "Sage", "tag": "wise · measured"},
-    {"id": "shimmer", "name": "Shimmer", "tag": "bright · cheerful"},
-]
 
 SAMPLE_TEXT = (
     "ECHO is a browser-native reading surface for listening to drafts out loud. "
@@ -79,7 +88,7 @@ MAX_TTS_CHARS = 4000  # OpenAI TTS hard limit is 4096; keep buffer
 
 class TTSRequest(BaseModel):
     text: str
-    voice_id: str = "alloy"
+    voice_id: str = "echo"
     speed: float = 1.0
 
 
@@ -147,72 +156,20 @@ class TranscriptCreate(BaseModel):
 # ------------------------------------------------------------------------------
 
 
-def _tokenize_for_timing(text: str) -> List[dict]:
-    """
-    Return a list of tokens with: word, index, start_char, end_char.
-    Splits on whitespace while preserving character offsets for the UI to
-    highlight the correct slice even when the text has punctuation.
-    """
-    tokens = []
-    i = 0
-    idx = 0
-    n = len(text)
-    while i < n:
-        # skip whitespace
-        while i < n and text[i].isspace():
-            i += 1
-        if i >= n:
-            break
-        start = i
-        while i < n and not text[i].isspace():
-            i += 1
-        word = text[start:i]
-        tokens.append(
-            {"word": word, "index": idx, "start_char": start, "end_char": i}
-        )
-        idx += 1
-    return tokens
-
-
 def _estimate_word_timings(text: str) -> tuple[List[WordTiming], float]:
-    """
-    Estimate per-word timings using a character-weighted model.
-    OpenAI TTS (tts-1, speed=1.0) averages ~15 chars/sec. We weight each word
-    by (len(word)+1) and add a small boost for punctuation tails.
-    """
-    tokens = _tokenize_for_timing(text)
-    if not tokens:
-        return [], 0.0
-
-    weights = []
-    for t in tokens:
-        w = t["word"]
-        base = len(w) + 1
-        # extra pause for sentence-ending punctuation
-        if w and w[-1] in ".!?":
-            base += 4
-        elif w and w[-1] in ",;:":
-            base += 2
-        weights.append(base)
-
-    total_weight = sum(weights)
-    chars_per_sec = 15.0
-    total_duration = max(total_weight / chars_per_sec, 0.5)
-
-    cursor = 0.0
-    timings: List[WordTiming] = []
-    for t, w in zip(tokens, weights):
-        dur = (w / total_weight) * total_duration
-        timings.append(
+    timings, total_duration = estimate_word_timings(text)
+    return (
+        [
             WordTiming(
-                word=t["word"],
-                start=round(cursor, 3),
-                end=round(cursor + dur, 3),
-                index=t["index"],
+                word=timing.word,
+                start=timing.start,
+                end=timing.end,
+                index=timing.index,
             )
-        )
-        cursor += dur
-    return timings, round(total_duration, 3)
+            for timing in timings
+        ],
+        total_duration,
+    )
 
 
 def _extract_pdf(data: bytes) -> str:
@@ -248,7 +205,21 @@ async def root():
 
 @api_router.get("/voices")
 async def get_voices():
-    return {"voices": VOICES, "default": "alloy"}
+    provider = get_provider()
+    try:
+        voices = await provider.list_voices()
+    except SpeechUnavailable as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    except Exception as e:
+        logger.error("voice catalog fetch failed: %s", e)
+        raise HTTPException(
+            status_code=502, detail=f"Voice catalog unavailable: {str(e)[:200]}"
+        )
+    return {
+        "voices": voices,
+        "default": provider.default_voice_id,
+        "provider": provider.name,
+    }
 
 
 @api_router.get("/sample-text")
@@ -256,28 +227,47 @@ async def get_sample_text():
     return {"text": SAMPLE_TEXT}
 
 
-@api_router.post("/tts/generate", response_model=TTSResponse)
+@api_router.post(
+    "/tts/generate",
+    response_model=TTSResponse,
+    dependencies=[Depends(require_api_key)],
+)
 async def generate_tts(req: TTSRequest):
-    text = (req.text or "").strip()
-    if not text:
+    source_text = (req.text or "").strip()
+    if not source_text:
         raise HTTPException(status_code=400, detail="Text is required.")
+    text = normalize_tts_text(source_text)
+    if not text:
+        raise HTTPException(
+            status_code=400,
+            detail="Text contains no readable content after cleanup.",
+        )
     if len(text) > MAX_TTS_CHARS:
         raise HTTPException(
             status_code=413,
             detail=f"Text exceeds {MAX_TTS_CHARS} character limit. Split into smaller passages.",
         )
 
-    voice_id = req.voice_id if any(v["id"] == req.voice_id for v in VOICES) else "alloy"
-    speed = max(0.5, min(req.speed or 1.0, 2.0))
+    provider = get_provider()
+    try:
+        catalog = await provider.list_voices()
+    except SpeechUnavailable as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
+    # Fall back to the provider's own default, not a hardcoded id. ElevenLabs voice ids are
+    # opaque hashes, so the old `else "echo"` fallback would have sent an unknown voice.
+    voice_id = (
+        req.voice_id
+        if any(v["id"] == req.voice_id for v in catalog)
+        else provider.default_voice_id
+    )
 
     try:
-        audio_b64 = await tts_client.generate_speech_base64(
-            text=text,
-            model="tts-1",
-            voice=voice_id,
-            speed=speed,
-            response_format="mp3",
+        audio_b64, speed = await provider.synthesize(
+            text=text, voice_id=voice_id, speed=req.speed or 1.0
         )
+    except SpeechUnavailable as e:
+        raise HTTPException(status_code=503, detail=str(e))
     except Exception as e:
         logger.error("TTS generation failed: %s", e)
         raise HTTPException(
@@ -285,7 +275,8 @@ async def generate_tts(req: TTSRequest):
         )
 
     timings, total_dur = _estimate_word_timings(text)
-    # scale timings to account for speed (slower speed = longer audio)
+    # Scale timings by the speed the provider actually applied (providers clamp differently),
+    # so the readback highlight stays in sync with the voice.
     if speed and speed > 0:
         scaled = []
         for t in timings:
@@ -311,7 +302,11 @@ async def generate_tts(req: TTSRequest):
     )
 
 
-@api_router.post("/stt/transcribe", response_model=STTResponse)
+@api_router.post(
+    "/stt/transcribe",
+    response_model=STTResponse,
+    dependencies=[Depends(require_api_key)],
+)
 async def transcribe(audio: UploadFile = File(...)):
     if not audio.filename:
         raise HTTPException(status_code=400, detail="Audio filename required.")
@@ -325,29 +320,20 @@ async def transcribe(audio: UploadFile = File(...)):
             detail="Audio over 24 MB. Split into shorter clips.",
         )
 
-    # emergentintegrations' SpeechToText expects a file-like object with .name
-    buf = io.BytesIO(raw)
-    buf.name = audio.filename
-
     try:
-        result = await stt_client.transcribe(
-            file=buf,
-            model="whisper-1",
-            response_format="json",
-        )
+        text = await get_provider().transcribe(data=raw, filename=audio.filename)
+    except SpeechUnavailable as e:
+        raise HTTPException(status_code=503, detail=str(e))
     except Exception as e:
-        logger.error("Whisper transcribe failed: %s", e)
+        logger.error("Transcription failed: %s", e)
         raise HTTPException(
             status_code=502, detail=f"Transcription failed: {str(e)[:200]}"
         )
 
-    text = getattr(result, "text", None) or (
-        result.get("text") if isinstance(result, dict) else str(result)
-    )
     text = (text or "").strip()
 
     doc = Transcript(text=text)
-    await db.transcripts.insert_one(doc.dict())
+    await get_db().transcripts.insert_one(doc.dict())
     return STTResponse(
         id=doc.id,
         transcript=text,
@@ -356,7 +342,11 @@ async def transcribe(audio: UploadFile = File(...)):
     )
 
 
-@api_router.post("/parse-file", response_model=ParseFileResponse)
+@api_router.post(
+    "/parse-file",
+    response_model=ParseFileResponse,
+    dependencies=[Depends(require_api_key)],
+)
 async def parse_file(file: UploadFile = File(...)):
     if not file.filename:
         raise HTTPException(status_code=400, detail="Filename required.")
@@ -399,34 +389,34 @@ async def parse_file(file: UploadFile = File(...)):
 @api_router.post("/drafts", response_model=Draft)
 async def save_draft(payload: DraftCreate):
     draft = Draft(**payload.dict())
-    await db.drafts.insert_one(draft.dict())
+    await get_db().drafts.insert_one(draft.dict())
     return draft
 
 
 @api_router.get("/drafts", response_model=List[Draft])
 async def list_drafts():
-    rows = await db.drafts.find({}, {"_id": 0}).sort("created_at", -1).to_list(200)
+    rows = await get_db().drafts.find({}, {"_id": 0}).sort("created_at", -1).to_list(200)
     return [Draft(**r) for r in rows]
 
 
 @api_router.post("/transcripts", response_model=Transcript)
 async def save_transcript(payload: TranscriptCreate):
     doc = Transcript(**payload.dict())
-    await db.transcripts.insert_one(doc.dict())
+    await get_db().transcripts.insert_one(doc.dict())
     return doc
 
 
 @api_router.get("/transcripts", response_model=List[Transcript])
 async def list_transcripts():
     rows = (
-        await db.transcripts.find({}, {"_id": 0}).sort("created_at", -1).to_list(200)
+        await get_db().transcripts.find({}, {"_id": 0}).sort("created_at", -1).to_list(200)
     )
     return [Transcript(**r) for r in rows]
 
 
 @api_router.delete("/drafts/{draft_id}")
 async def delete_draft(draft_id: str):
-    res = await db.drafts.delete_one({"id": draft_id})
+    res = await get_db().drafts.delete_one({"id": draft_id})
     if res.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Draft not found")
     return {"deleted": res.deleted_count, "id": draft_id}
@@ -434,7 +424,7 @@ async def delete_draft(draft_id: str):
 
 @api_router.delete("/transcripts/{transcript_id}")
 async def delete_transcript(transcript_id: str):
-    res = await db.transcripts.delete_one({"id": transcript_id})
+    res = await get_db().transcripts.delete_one({"id": transcript_id})
     if res.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Transcript not found")
     return {"deleted": res.deleted_count, "id": transcript_id}
@@ -457,4 +447,15 @@ app.add_middleware(
 
 @app.on_event("shutdown")
 async def shutdown_db_client():
-    mongo_client.close()
+    if _mongo_client is not None:
+        _mongo_client.close()
+
+
+# Serve the exported Expo web build from the same origin as the API, when it exists. One
+# origin means one URL to publish and no CORS surface. Mounted last so /api always wins.
+_web_dist = ROOT_DIR.parent / "frontend" / "dist"
+if _web_dist.is_dir():
+    app.mount("/", StaticFiles(directory=str(_web_dist), html=True), name="web")
+    logger.info("serving web build from %s", _web_dist)
+else:
+    logger.info("no web build at %s; API only", _web_dist)

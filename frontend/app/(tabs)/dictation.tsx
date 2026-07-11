@@ -148,29 +148,32 @@ export default function DictationScreen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isRec, recorder]);
 
-  const runTranscribe = useCallback(async (uri: string, filename: string) => {
-    try {
-      setState('transcribing');
-      const mime = filename.endsWith('.m4a')
-        ? 'audio/m4a'
-        : filename.endsWith('.mp3')
-        ? 'audio/mpeg'
-        : filename.endsWith('.wav')
-        ? 'audio/wav'
-        : filename.endsWith('.webm')
-        ? 'audio/webm'
-        : 'audio/mpeg';
-      const r: STTResponse = await api.transcribe(uri, filename, mime);
-      setTranscript(r.transcript || '');
-      setTranscriptId(r.id);
-      setState('ready');
-      h.success();
-    } catch (e: any) {
-      h.error();
-      setError(e?.message || 'Transcription failed');
-      setState('idle');
-    }
-  }, []);
+  const runTranscribe = useCallback(
+    async (uri: string, filename: string, webFile?: Blob | File | null) => {
+      try {
+        setState('transcribing');
+        const mime = filename.endsWith('.m4a')
+          ? 'audio/m4a'
+          : filename.endsWith('.mp3')
+          ? 'audio/mpeg'
+          : filename.endsWith('.wav')
+          ? 'audio/wav'
+          : filename.endsWith('.webm')
+          ? 'audio/webm'
+          : 'audio/mpeg';
+        const r: STTResponse = await api.transcribe(uri, filename, mime, webFile);
+        setTranscript(r.transcript || '');
+        setTranscriptId(r.id);
+        setState('ready');
+        h.success();
+      } catch (e: any) {
+        h.error();
+        setError(e?.message || 'Transcription failed');
+        setState('idle');
+      }
+    },
+    []
+  );
 
   const onImport = useCallback(async () => {
     h.light();
@@ -185,7 +188,7 @@ export default function DictationScreen() {
       const a = res.assets[0];
       setTranscript('');
       setTranscriptId(null);
-      await runTranscribe(a.uri, a.name || 'import.mp3');
+      await runTranscribe(a.uri, a.name || 'import.mp3', a.file ?? null);
     } catch (e: any) {
       setError(e?.message || 'Import failed');
       setState('idle');
