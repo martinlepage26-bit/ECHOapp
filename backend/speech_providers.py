@@ -4,21 +4,32 @@ ECHO was scaffolded against `emergentintegrations`, a proprietary wrapper that i
 longer installable. This module replaces it with a provider-selected implementation so
 ECHO is never welded to a single vendor again.
 
-Select with SPEECH_PROVIDER: "elevenlabs" (default) | "openai".
-The chosen provider needs its own key (ELEVENLABS_API_KEY / OPENAI_API_KEY). When no key
-is present the app still boots and serves /api/voices; only synthesis and transcription
-raise SpeechUnavailable, which the API surfaces as a clean 503 rather than a crash.
+Select with SPEECH_PROVIDER:
+
+  piper      (default) — neural TTS running locally. Free, offline, no key, no metering.
+  elevenlabs           — premium hosted voices. Needs ELEVENLABS_API_KEY. Billed per character.
+  openai               — hosted. Needs OPENAI_API_KEY. Billed per character.
+
+Piper is the default because ECHO reads back long drafts, which is the most character-hungry
+workload there is, and a readback tool that costs money per paragraph will not get used.
+Piper's voices are neural, not the operating system's speech synthesizer: PRODUCT.md names
+robotic fallback voices as an anti-reference, and system voices are exactly that.
+
+The hosted providers still boot without a key; only synthesis and transcription raise
+SpeechUnavailable, which the API surfaces as a clean 503 rather than a crash.
 """
 
 import base64
 import io
 import logging
 import os
+import subprocess
+from pathlib import Path
 from typing import List, Optional, Tuple
 
 logger = logging.getLogger("echo.speech")
 
-DEFAULT_PROVIDER = "elevenlabs"
+DEFAULT_PROVIDER = "piper"
 
 
 class SpeechUnavailable(RuntimeError):
@@ -263,9 +274,134 @@ class OpenAIProvider(SpeechProvider):
         return (getattr(result, "text", "") or "").strip()
 
 
+class PiperProvider(SpeechProvider):
+    """Piper: neural TTS running locally. Free, offline, no key, no per-character billing.
+
+    Chosen over Kokoro, which sounds excellent but synthesizes at ~19x slower than realtime
+    on this host's CPU — unusable for reading back a draft. Piper runs at ~0.04x realtime
+    (roughly 24x faster than the audio plays), which is what makes free readback viable.
+
+    These are neural voices, not the OS speech synthesizer. PRODUCT.md rules out robotic
+    fallback voices, and system voices are exactly that.
+    """
+
+    name = "piper"
+
+    SPEED_MIN = 0.5
+    SPEED_MAX = 2.0
+
+    # Human-facing catalog. Only voices whose model files are actually on disk are served.
+    KNOWN = {
+        "en_GB-jenny_dioco-medium": ("Jenny", "british female · fluid · smooth"),
+        "en_GB-southern_english_female-low": ("Southern English", "british female · warm"),
+        "en_GB-cori-medium": ("Cori", "british female · bright"),
+        "en_GB-alba-medium": ("Alba", "scottish female · clear"),
+    }
+
+    DEFAULT = "en_GB-jenny_dioco-medium"
+
+    def __init__(self) -> None:
+        self._dir = Path(
+            os.environ.get("PIPER_VOICE_DIR")
+            or Path.home() / ".local" / "share" / "piper-voices"
+        )
+        self._loaded: dict = {}
+        self.default_voice_id = os.environ.get("PIPER_DEFAULT_VOICE", self.DEFAULT)
+
+    def _model_path(self, voice_id: str) -> Path:
+        return self._dir / f"{voice_id}.onnx"
+
+    def _available(self) -> List[str]:
+        if not self._dir.is_dir():
+            return []
+        return sorted(p.stem for p in self._dir.glob("*.onnx"))
+
+    def configured(self) -> bool:
+        return bool(self._available())
+
+    async def list_voices(self) -> List[dict]:
+        available = self._available()
+        if not available:
+            raise SpeechUnavailable(
+                f"No Piper voice models found in {self._dir}. Download at least one .onnx "
+                f"voice, or set PIPER_VOICE_DIR / SPEECH_PROVIDER."
+            )
+        voices = [
+            {
+                "id": vid,
+                "name": self.KNOWN.get(vid, (vid, ""))[0],
+                "tag": self.KNOWN.get(vid, (vid, "piper · local"))[1] or "piper · local",
+            }
+            for vid in available
+        ]
+        if not any(v["id"] == self.default_voice_id for v in voices):
+            self.default_voice_id = voices[0]["id"]
+        return voices
+
+    def _voice(self, voice_id: str):
+        if voice_id not in self._loaded:
+            from piper import PiperVoice
+
+            path = self._model_path(voice_id)
+            if not path.is_file():
+                raise SpeechUnavailable(f"Piper voice model not found: {path}")
+            self._loaded[voice_id] = PiperVoice.load(str(path))
+        return self._loaded[voice_id]
+
+    def _synthesize_sync(self, text: str, voice_id: str, speed: float) -> bytes:
+        import wave
+
+        from piper import SynthesisConfig
+
+        voice = self._voice(voice_id)
+        buf = io.BytesIO()
+        with wave.open(buf, "wb") as wav:
+            # length_scale stretches duration, so it is the inverse of speed.
+            voice.synthesize_wav(
+                text, wav, syn_config=SynthesisConfig(length_scale=1.0 / speed)
+            )
+        return _wav_to_mp3(buf.getvalue())
+
+    async def synthesize(
+        self, text: str, voice_id: str, speed: float
+    ) -> Tuple[str, float]:
+        import asyncio
+
+        applied = max(self.SPEED_MIN, min(speed, self.SPEED_MAX))
+        # Synthesis is CPU-bound; keep it off the event loop so the server stays responsive.
+        mp3 = await asyncio.to_thread(self._synthesize_sync, text, voice_id, applied)
+        if not mp3:
+            raise SpeechUnavailable("Piper produced no audio.")
+        return base64.b64encode(mp3).decode("ascii"), applied
+
+    async def transcribe(self, data: bytes, filename: str) -> str:
+        raise SpeechUnavailable(
+            "Piper is text-to-speech only. Set SPEECH_PROVIDER to a provider with speech "
+            "recognition (elevenlabs, openai) to use dictation."
+        )
+
+
+def _wav_to_mp3(wav_bytes: bytes) -> bytes:
+    """Piper emits WAV; the client expects audio/mpeg. ffmpeg is present on this host."""
+    proc = subprocess.run(
+        ["ffmpeg", "-hide_banner", "-loglevel", "error",
+         "-f", "wav", "-i", "pipe:0", "-codec:a", "libmp3lame", "-b:a", "128k",
+         "-f", "mp3", "pipe:1"],
+        input=wav_bytes,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if proc.returncode != 0:
+        raise SpeechUnavailable(
+            f"ffmpeg failed to encode MP3: {proc.stderr.decode()[:200]}"
+        )
+    return proc.stdout
+
+
 _PROVIDERS = {
     ElevenLabsProvider.name: ElevenLabsProvider,
     OpenAIProvider.name: OpenAIProvider,
+    PiperProvider.name: PiperProvider,
 }
 
 _active: Optional[SpeechProvider] = None

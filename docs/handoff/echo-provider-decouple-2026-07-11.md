@@ -99,6 +99,51 @@ Interpreter: `~/.venvs/echoapp/bin/python` (the project venv — it already cont
   reachable at `127.0.0.1:27019` (no system `mongod`, which is what an earlier check looked
   for). Storage works today.
 
+## Free Local Voice (Piper) Is Now The Default
+
+Martin's requirement: free, but not the operating system's speech synthesizer — `PRODUCT.md`
+names robotic fallback voices as an anti-reference, which rules out browser `speechSynthesis`
+by spec. He asked for the voice character he had before: female, British, fluid, smooth.
+
+Two free neural engines were benchmarked on this host (aarch64, CPU only):
+
+| Engine | Quality | Realtime factor | Verdict |
+|---|---|---|---|
+| Kokoro-82M (torch) | excellent | **18.86x slower than realtime** (8.4s audio took 158s) | **rejected** — a 5-minute draft would take over an hour |
+| Piper (ONNX) | good | **0.042x** (8.3s audio in 0.35s, ~24x faster than realtime) | **selected** |
+
+Kokoro is the better-sounding engine and would be the obvious pick on a GPU. On this CPU it
+is not usable for readback at any quality, so it lost on the only axis that mattered.
+
+`PiperProvider` is now the default (`SPEECH_PROVIDER=piper`). No key, no network, no
+per-character billing. Voices are `.onnx` files in `PIPER_VOICE_DIR`
+(`~/.local/share/piper-voices`, ~63MB each). Piper emits WAV, so it is transcoded to MP3 via
+`ffmpeg` to keep the existing `audio/mpeg` client contract unchanged. Synthesis runs in a
+worker thread so a long draft does not block the event loop.
+
+Voices installed, all British female except Alba (Scottish):
+
+- `en_GB-jenny_dioco-medium` — **default**. Fluid, smooth. Closest to the brief.
+- `en_GB-southern_english_female-low` — warm
+- `en_GB-cori-medium` — bright
+- `en_GB-alba-medium` — Scottish, clear
+
+Change the default with `PIPER_DEFAULT_VOICE`. No code edit.
+
+### Regression this introduces — dictation
+
+Piper is **text-to-speech only**. With `SPEECH_PROVIDER=piper`, `POST /api/stt/transcribe`
+returns a clean 503 explaining that dictation needs a provider with speech recognition. The
+Dictation tab therefore does not work on the free provider. Options, none taken yet:
+
+- Accept it (readback is the product; dictation is secondary), or
+- Run STT locally too via `faster-whisper` — free, and a small-model transcribe is far less
+  CPU-bound than TTS because it is not realtime-interactive, or
+- Keep dictation on ElevenLabs/OpenAI while readback stays free (needs a separate
+  `STT_PROVIDER` knob, which does not exist yet).
+
+**Unresolved: which of the three Martin wants.**
+
 ## The ElevenLabs Key Is Scope-Limited (and the code now handles it)
 
 Martin's key **cannot read the account voice catalog**. Probed directly:
