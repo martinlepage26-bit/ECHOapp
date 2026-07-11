@@ -2,7 +2,9 @@
 
 - Date: `2026-07-11`
 - Branch: `codex/echo-web-bugfixes`
-- Commit hashes: **none — changes left uncommitted in the working tree**
+- Commit: `3e05016` — "Decouple ECHO from the dead Emergent platform; ship live on
+  ElevenLabs" (20 files, +1729/-246). Carries both this session's work and the prior
+  session's readback fixes, which had never been committed. Not pushed.
 - Live URL: `https://mechanics-masters-doll-corpus.trycloudflare.com`
   (ephemeral cloudflared quick tunnel → `127.0.0.1:8099`; dies when the process stops)
 
