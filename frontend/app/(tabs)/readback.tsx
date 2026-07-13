@@ -91,7 +91,6 @@ export default function ReadbackScreen() {
   const shouldAutoplayRef = useRef(false);
   const webAudioRef = useRef<HTMLAudioElement | null>(null);
   const webLoadedUriRef = useRef<string | null>(null);
-  const webReplayGuardUntilRef = useRef(0);
   const rafRef = useRef<number | null>(null);
 
   const { words: wc, chars: cc, mins } = wordAndCharCount(text);
@@ -150,7 +149,12 @@ export default function ReadbackScreen() {
       try {
         const { voices, default: def } = await api.getVoices();
         setVoices(voices);
-        if (def) setVoiceId(def);
+        const preferredVoiceId =
+          voices.find((voice) => voice.id === 'echo')?.id ||
+          def ||
+          voices[0]?.id ||
+          'echo';
+        setVoiceId(preferredVoiceId);
       } catch (e) {
         console.warn('voices fetch failed', e);
       }
@@ -200,8 +204,9 @@ export default function ReadbackScreen() {
       stopRaf();
       setWebIsPlaying(false);
       setWebPositionMs(Number.isFinite(audio.duration) ? Math.round(audio.duration * 1000) : 0);
-      setActiveIdx(-1);
-      lastActiveRef.current = -1;
+      const finalIdx = wordsRef.current.length ? wordsRef.current.length - 1 : -1;
+      setActiveIdx(finalIdx);
+      lastActiveRef.current = finalIdx;
       h.light();
     };
 
@@ -266,6 +271,9 @@ export default function ReadbackScreen() {
   useEffect(() => {
     const ws = wordsRef.current;
     if (!ws.length || !audioUri) return;
+    if (!isPlaying && positionMs <= 0 && lastActiveRef.current < 0) {
+      return;
+    }
     const t = positionMs / 1000;
     let idx = -1;
     for (let i = 0; i < ws.length; i++) {
@@ -292,8 +300,9 @@ export default function ReadbackScreen() {
   useEffect(() => {
     if (isWeb) return;
     if (status?.didJustFinish) {
-      setActiveIdx(-1);
-      lastActiveRef.current = -1;
+      const finalIdx = wordsRef.current.length ? wordsRef.current.length - 1 : -1;
+      setActiveIdx(finalIdx);
+      lastActiveRef.current = finalIdx;
       h.light();
     }
   }, [isWeb, status?.didJustFinish]);
@@ -450,10 +459,6 @@ export default function ReadbackScreen() {
     }
     if (audioUri) {
       try {
-        if (isWeb && Date.now() < webReplayGuardUntilRef.current) {
-          setPlaybackHint('Audio ready. Press PLAY to start readback.');
-          return;
-        }
         if (isPlaying) {
           pauseCurrentAudio();
           setPlaybackHint(null);
@@ -482,7 +487,6 @@ export default function ReadbackScreen() {
       const uri = makePlayableAudioUri(r.audio_base64, r.mime);
       setAudioUri(uri);
       if (isWeb) {
-        webReplayGuardUntilRef.current = Date.now() + 400;
         setPlaybackHint('Audio ready. Press PLAY to start readback.');
       } else {
         shouldAutoplayRef.current = true;
@@ -573,6 +577,7 @@ export default function ReadbackScreen() {
         {displayWords.map((w, i) => (
           <Text
             key={`${w.index}-${i}`}
+            testID={i === activeIdx ? 'active-readback-word' : undefined}
             style={[
               styles.word,
               i === activeIdx && styles.wordActive,

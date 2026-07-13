@@ -8,7 +8,9 @@
     "android": "expo start --android",
     "ios": "expo start --ios",
     "web": "expo start --web",
-    "lint": "expo lint"
+    "lint": "expo lint",
+    "web:export": "expo export -p web --output-dir dist",
+    "web:e2e": "npm run web:export && npx playwright test tests/readback-web.spec.ts --config=playwright.config.ts --browser=all"
   },
   "dependencies": {
     "@babel/runtime": "^7.20.6",
@@ -51,6 +53,7 @@
     "react-native-worklets": "0.5.1"
   },
   "devDependencies": {
+    "@playwright/test": "^1.54.2",
     "@babel/core": "^7.25.2",
     "@types/react": "~19.1.0",
     "eslint": "^9.25.0",
