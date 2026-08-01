@@ -1,6 +1,9 @@
-# ECHO speech edge: Cloudflare Workers AI (Deepgram Aura TTS + Whisper STT).
-# Deploy:  cd workers/echo-ai && wrangler deploy
-# Secret:  wrangler secret put ECHO_API_KEY
+# ECHO full stack on Cloudflare Workers:
+#   - Static Expo web UI (frontend/dist)
+#   - /api/* speech via Workers AI (Aura TTS + Whisper STT)
+#
+# Deploy:  from repo root:  bash scripts/deploy-cf.sh
+# Secret:  cd workers/echo-ai && npx wrangler secret put ECHO_API_KEY
 name = "echo-ai"
 main = "src/worker.js"
 compatibility_date = "2026-07-31"
@@ -9,16 +12,21 @@ compatibility_flags = ["nodejs_compat"]
 [ai]
 binding = "AI"
 
+# Serve the Expo export. API routes run the Worker first; everything else is static.
+[assets]
+directory = "../../frontend/dist"
+binding = "ASSETS"
+# Map /readback → readback.html (Expo static export)
+html_handling = "auto-trailing-slash"
+not_found_handling = "404-page"
+# Only /api/* hits the Worker script (and AI); HTML/JS/CSS stay edge-static.
+run_worker_first = ["/api/*"]
+
 [observability]
 enabled = true
 head_sampling_rate = 1
 
-# Non-secret defaults (override in dashboard or via `wrangler secret` / vars).
 [vars]
 ECHO_TTS_MODEL = "@cf/deepgram/aura-2-en"
 ECHO_STT_MODEL = "@cf/openai/whisper-large-v3-turbo"
 ECHO_DEFAULT_VOICE = "athena"
-# Comma-separated. Leave empty to use the built-in Aura English catalog.
-# ECHO_TTS_VOICES = "athena,luna,orion,asteria,hera,apollo,iris"
-# Comma-separated Origin allowlist for browser clients. Empty = require API key only.
-# ECHO_ALLOWED_ORIGINS = "https://example.com,http://localhost:8081"

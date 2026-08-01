@@ -1,18 +1,18 @@
 /**
- * ECHO speech edge on Cloudflare Workers AI.
+ * ECHO full stack on Cloudflare Workers.
  *
- * Routes (ECHO backend-compatible):
+ * Static Expo UI is served via the ASSETS binding (frontend/dist).
+ * API routes (run_worker_first = /api/*):
  *   GET  /api/              — health
  *   GET  /api/voices        — voice catalog
+ *   GET  /api/sample-text   — sample draft
  *   POST /api/tts/generate  — JSON {text, voice_id, speed} → TTSResponse
- *   POST /api/stt/transcribe — multipart field "audio" or raw body → STTResponse
+ *   POST /api/stt/transcribe — multipart field "audio" → STTResponse
+ *   *    /api/drafts|transcripts|parse-file — 503 (Mongo/storage not on edge)
  *
- * Legacy (site-compatible):
- *   POST /api/echo-tts
- *   POST /api/echo-transcribe
+ * Legacy: POST /api/echo-tts, /api/echo-transcribe
  *
  * Auth: X-Echo-Key (or Authorization: Bearer) must match ECHO_API_KEY when set.
- * Browser CORS: Origin must match ECHO_ALLOWED_ORIGINS when that list is non-empty.
  */
 
 const DEFAULT_TTS_MODEL = "@cf/deepgram/aura-2-en";
@@ -272,12 +272,25 @@ function pathOf(url) {
   return url.pathname.replace(/\/+$/, "") || "/";
 }
 
+const SAMPLE_TEXT =
+  "ECHO is a browser-native reading surface for listening to drafts out loud. " +
+  "Paste text or import a document, choose a voice profile, and hear the language " +
+  "back with live word tracking.";
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     const path = pathOf(url);
     const origin = request.headers.get("Origin") || "";
     const responseOrigin = origin || "*";
+
+    // Non-API traffic: static Expo export (index, /readback, assets, …).
+    if (!path.startsWith("/api") && path !== "/health") {
+      if (env.ASSETS) {
+        return env.ASSETS.fetch(request);
+      }
+      return new Response("ECHO UI assets not configured.", { status: 503 });
+    }
 
     if (request.method === "OPTIONS") {
       return new Response(null, { status: 204, headers: corsHeaders(responseOrigin) });
@@ -286,8 +299,7 @@ export default {
     // Health / discovery (no auth)
     if (
       request.method === "GET" &&
-      (path === "/" ||
-        path === "/health" ||
+      (path === "/health" ||
         path === "/api" ||
         path === "/api/" ||
         path === "/api/echo-tts" ||
@@ -300,6 +312,7 @@ export default {
           status: "online",
           backend: "Cloudflare Workers AI",
           provider: "workers_ai",
+          ui: "static-assets",
           defaults: {
             tts_model: (env.ECHO_TTS_MODEL || DEFAULT_TTS_MODEL).trim(),
             stt_model: (env.ECHO_STT_MODEL || DEFAULT_STT_MODEL).trim(),
@@ -326,6 +339,27 @@ export default {
       );
     }
 
+    if (request.method === "GET" && path === "/api/sample-text") {
+      return json({ text: SAMPLE_TEXT }, 200, responseOrigin);
+    }
+
+    // Storage routes need Mongo on the Python API — not available on pure edge deploy.
+    if (
+      path.startsWith("/api/drafts") ||
+      path.startsWith("/api/transcripts") ||
+      path === "/api/parse-file"
+    ) {
+      return json(
+        {
+          detail:
+            "Library storage and file parse are not on the Cloudflare edge deploy. " +
+            "Readback and dictation work; use the Python API for drafts/import.",
+        },
+        503,
+        responseOrigin,
+      );
+    }
+
     // Everything below is gated when ECHO_API_KEY is set.
     const auth = await authorize(request, env, origin);
     if (!auth.ok) {
@@ -334,7 +368,7 @@ export default {
 
     try {
       // --- ECHO-compatible TTS ---
-      if (request.method === "POST" && (path === "/api/tts/generate" || path === "/api/echo-tts" || path === "/")) {
+      if (request.method === "POST" && (path === "/api/tts/generate" || path === "/api/echo-tts")) {
         let body;
         try {
           body = await request.json();

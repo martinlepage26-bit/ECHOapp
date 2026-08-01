@@ -1,41 +1,41 @@
-# echo-ai — Cloudflare Workers AI speech edge for ECHO
+# echo-ai — ECHO on Cloudflare Workers
 
-Runs **Deepgram Aura-2** TTS and **Whisper large-v3-turbo** STT on Cloudflare Workers AI, with the same route shapes the ECHO Python backend uses.
+Full public stack on one hostname:
+
+- **UI:** Expo web export (`frontend/dist`) via Workers Static Assets
+- **Speech:** Deepgram Aura-2 TTS + Whisper large-v3-turbo STT (`env.AI`)
+- **API shape:** same `/api/*` routes the Expo app already calls
+
+Live: https://echo-ai.martinlepage26.workers.dev/readback
 
 ## Routes
 
 | Method | Path | Auth | Response |
 |--------|------|------|----------|
+| GET | `/`, `/readback`, … | no | static UI |
 | GET | `/api/` | no | health |
 | GET | `/api/voices` | no | `{ voices, default, provider }` |
-| POST | `/api/tts/generate` | key when set | ECHO `TTSResponse` JSON (base64 audio) |
+| GET | `/api/sample-text` | no | sample draft |
+| POST | `/api/tts/generate` | key when set | ECHO `TTSResponse` JSON |
 | POST | `/api/stt/transcribe` | key when set | ECHO `STTResponse` JSON |
-| POST | `/api/echo-tts` | key when set | raw audio bytes (legacy site) |
-| POST | `/api/echo-transcribe` | key when set | legacy transcript JSON |
+| * | `/api/drafts`, `/api/transcripts`, `/api/parse-file` | — | 503 (Python/Mongo only) |
 
-## Deploy
+## Deploy (recommended)
+
+From repo root (builds UI + deploys Worker + syncs secret):
+
+```bash
+bash scripts/deploy-cf.sh
+```
+
+Requires `ECHO_API_KEY` in `backend/.env` (baked into the web bundle and stored as a Worker secret).
+
+## Local Worker only
 
 ```bash
 cd workers/echo-ai
 npm install
-npx wrangler login          # once
-npx wrangler secret put ECHO_API_KEY
-npx wrangler deploy
-```
-
-Copy the printed `*.workers.dev` URL into the ECHO backend:
-
-```env
-SPEECH_PROVIDER=workers_ai
-WORKERS_AI_URL=https://echo-ai.<account>.workers.dev
-WORKERS_AI_TOKEN=<same value as ECHO_API_KEY secret>
-```
-
-## Local
-
-```bash
 npx wrangler dev
-# WORKERS_AI_URL=http://127.0.0.1:8787
 ```
 
-Workers AI models are billed on the Cloudflare account (Aura-2 is character-metered). Pair with `ECHO_API_KEY` on any public hostname.
+Workers AI is billed on the Cloudflare account (Aura-2 is character-metered).
