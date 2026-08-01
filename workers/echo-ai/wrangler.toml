@@ -30,3 +30,6 @@ head_sampling_rate = 1
 ECHO_TTS_MODEL = "@cf/deepgram/aura-2-en"
 ECHO_STT_MODEL = "@cf/openai/whisper-large-v3-turbo"
 ECHO_DEFAULT_VOICE = "athena"
+# Origins allowed without a browser-held key when ECHO_API_KEY is unset.
+# With a key set, Pages Functions inject the secret when proxying from the site.
+ECHO_ALLOWED_ORIGINS = "https://martin.govern-ai.ca,https://martin-lepage-site.pages.dev,https://martinlepage26-bit.github.io,https://*.martin-lepage-site.pages.dev"
