@@ -281,6 +281,64 @@ class OpenAIProvider(SpeechProvider):
         return (getattr(result, "text", "") or "").strip()
 
 
+class CloneVoiceProvider(SpeechProvider):
+    """Local SpeechT5 readaloud from uploaded preview samples (no ElevenLabs API).
+
+    Voices: echo, patricia, martin-en, martin-fr — each backed by a reference MP3
+    under VOICE_SAMPLES_DIR / backend/voices/.
+    """
+
+    name = "clone"
+
+    SPEED_MIN = 0.5
+    SPEED_MAX = 2.0
+
+    def __init__(self) -> None:
+        from clone_tts import get_clone_engine
+
+        self._engine = get_clone_engine()
+        voices = self._engine.available_voices()
+        self.default_voice_id = voices[0]["id"] if voices else "echo"
+
+    def configured(self) -> bool:
+        return bool(self._engine.available_voices())
+
+    async def list_voices(self) -> List[dict]:
+        voices = self._engine.available_voices()
+        if not voices:
+            raise SpeechUnavailable(
+                "No voice samples found. Place MP3s in backend/voices/ "
+                "(echo.mp3, patricia.mp3, martin-en.mp3, martin-fr.mp3)."
+            )
+        return [{"id": v["id"], "name": v["name"], "tag": v["tag"]} for v in voices]
+
+    async def synthesize(
+        self, text: str, voice_id: str, speed: float
+    ) -> Tuple[str, float, str]:
+        import asyncio
+        import base64
+
+        applied = max(self.SPEED_MIN, min(speed or 1.0, self.SPEED_MAX))
+        if not self._engine.has_voice(voice_id):
+            voice_id = self.default_voice_id
+
+        def _run():
+            return self._engine.synthesize(text, voice_id, applied)
+
+        try:
+            wav_bytes, mime = await asyncio.to_thread(_run)
+        except Exception as e:
+            raise SpeechUnavailable(f"clone TTS failed: {str(e)[:200]}") from e
+        if not wav_bytes:
+            raise SpeechUnavailable("clone TTS produced empty audio.")
+        return base64.b64encode(wav_bytes).decode("ascii"), applied, mime
+
+    async def transcribe(self, data: bytes, filename: str) -> str:
+        raise SpeechUnavailable(
+            "Clone provider is TTS-only. Use workers_ai or openai for dictation."
+        )
+
+
 class PiperProvider(SpeechProvider):
     """Piper: neural TTS running locally. Free, offline, no key, no per-character billing.
 
@@ -566,10 +624,13 @@ _PROVIDERS = {
     OpenAIProvider.name: OpenAIProvider,
     PiperProvider.name: PiperProvider,
     WorkersAIProvider.name: WorkersAIProvider,
+    CloneVoiceProvider.name: CloneVoiceProvider,
     # Aliases
     "cloudflare": WorkersAIProvider,
     "cf": WorkersAIProvider,
     "workers-ai": WorkersAIProvider,
+    "speecht5": CloneVoiceProvider,
+    "samples": CloneVoiceProvider,
 }
 
 _active: Optional[SpeechProvider] = None

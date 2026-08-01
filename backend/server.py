@@ -250,6 +250,19 @@ async def get_voices():
         raise HTTPException(
             status_code=502, detail=f"Voice catalog unavailable: {str(e)[:200]}"
         )
+    # Merge local sample-clone voices (Patricia, Martin, …) when present.
+    try:
+        from clone_tts import get_clone_engine
+
+        clone_voices = get_clone_engine().available_voices()
+        known = {v["id"] for v in voices}
+        for cv in clone_voices:
+            if cv["id"] not in known:
+                voices.append(
+                    {"id": cv["id"], "name": cv["name"], "tag": cv["tag"] + " · sample"}
+                )
+    except Exception as e:
+        logger.warning("clone voice catalog skipped: %s", e)
     return {
         "voices": voices,
         "default": provider.default_voice_id,
@@ -284,21 +297,37 @@ async def generate_tts(req: TTSRequest):
         )
 
     provider = get_provider()
+    # Sample-backed voices (patricia, martin-en, …) always use local SpeechT5 clone —
+    # no ElevenLabs API/token. Other voice ids use the configured SPEECH_PROVIDER.
+    use_clone = False
     try:
-        catalog = await provider.list_voices()
-    except SpeechUnavailable as e:
-        raise HTTPException(status_code=503, detail=str(e))
+        from clone_tts import get_clone_engine
 
-    # Fall back to the provider's own default, not a hardcoded id. ElevenLabs voice ids are
-    # opaque hashes, so the old `else "echo"` fallback would have sent an unknown voice.
-    voice_id = (
-        req.voice_id
-        if any(v["id"] == req.voice_id for v in catalog)
-        else provider.default_voice_id
-    )
+        use_clone = get_clone_engine().has_voice(req.voice_id)
+    except Exception:
+        use_clone = False
+
+    if use_clone:
+        from speech_providers import CloneVoiceProvider
+
+        synth_provider = CloneVoiceProvider()
+        voice_id = req.voice_id
+    else:
+        synth_provider = provider
+        try:
+            catalog = await provider.list_voices()
+        except SpeechUnavailable as e:
+            raise HTTPException(status_code=503, detail=str(e))
+
+        # Fall back to the provider's own default, not a hardcoded id.
+        voice_id = (
+            req.voice_id
+            if any(v["id"] == req.voice_id for v in catalog)
+            else provider.default_voice_id
+        )
 
     try:
-        audio_b64, speed, mime = await provider.synthesize(
+        audio_b64, speed, mime = await synth_provider.synthesize(
             text=text, voice_id=voice_id, speed=req.speed or 1.0
         )
     except SpeechUnavailable as e:
@@ -334,6 +363,30 @@ async def generate_tts(req: TTSRequest):
         char_count=len(text),
         words=timings,
         estimated_duration=total_dur,
+    )
+
+
+@api_router.post("/tts/raw", dependencies=_protected)
+async def generate_tts_raw(req: TTSRequest):
+    """Same as /tts/generate but returns raw audio bytes (for Pages Function proxy)."""
+    result = await generate_tts(req)
+    import base64
+
+    try:
+        audio = base64.b64decode(result.audio_base64)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Bad audio payload: {e}")
+    from fastapi.responses import Response
+
+    return Response(
+        content=audio,
+        media_type=result.mime or "audio/wav",
+        headers={
+            "X-Echo-Voice": result.voice_id,
+            "X-Echo-Backend": "SpeechT5-clone" if result.voice_id in {
+                "echo", "patricia", "martin-en", "martin-fr"
+            } else "provider",
+        },
     )
 
 
