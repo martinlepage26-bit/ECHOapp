@@ -1,0 +1,24 @@
+# ECHO speech edge: Cloudflare Workers AI (Deepgram Aura TTS + Whisper STT).
+# Deploy:  cd workers/echo-ai && wrangler deploy
+# Secret:  wrangler secret put ECHO_API_KEY
+name = "echo-ai"
+main = "src/worker.js"
+compatibility_date = "2026-07-31"
+compatibility_flags = ["nodejs_compat"]
+
+[ai]
+binding = "AI"
+
+[observability]
+enabled = true
+head_sampling_rate = 1
+
+# Non-secret defaults (override in dashboard or via `wrangler secret` / vars).
+[vars]
+ECHO_TTS_MODEL = "@cf/deepgram/aura-2-en"
+ECHO_STT_MODEL = "@cf/openai/whisper-large-v3-turbo"
+ECHO_DEFAULT_VOICE = "athena"
+# Comma-separated. Leave empty to use the built-in Aura English catalog.
+# ECHO_TTS_VOICES = "athena,luna,orion,asteria,hera,apollo,iris"
+# Comma-separated Origin allowlist for browser clients. Empty = require API key only.
+# ECHO_ALLOWED_ORIGINS = "https://example.com,http://localhost:8081"

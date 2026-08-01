@@ -48,8 +48,9 @@ type UploadPayload = {
   webFile?: Blob | File | null;
 };
 
-// Shared secret for the metered endpoints (TTS/STT/parse-file). Empty in local dev, where
-// the backend leaves the gate open; required once the API is on a public URL.
+// Shared gate for TTS/STT/parse-file and drafts/transcripts. Empty in local dev (backend
+// leaves the gate open). Required on a public URL. This value is compiled into the web
+// bundle — treat as rate-limit friction, not a private user secret.
 const ECHO_KEY = process.env.EXPO_PUBLIC_ECHO_KEY ?? '';
 
 export function authHeaders(extra?: Record<string, string>): Record<string, string> {

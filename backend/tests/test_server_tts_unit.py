@@ -35,7 +35,7 @@ class FakeProvider:
     async def synthesize(self, text, voice_id, speed):
         self.captured.update({"text": text, "voice_id": voice_id, "speed": speed})
         applied = max(0.7, min(speed, 1.2))
-        return base64.b64encode(b"fake-audio").decode("ascii"), applied
+        return base64.b64encode(b"fake-audio").decode("ascii"), applied, "audio/mpeg"
 
     async def transcribe(self, data, filename):
         return "fake transcript"

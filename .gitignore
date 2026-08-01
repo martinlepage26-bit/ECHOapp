@@ -110,3 +110,10 @@ credentials.json
 # ...but the no-secrets template must be tracked
 !.env.example
 !**/.env.example
+
+# Local runtime (never commit)
+backend/uvicorn.log
+backend/cloudflared.log
+*.log
+workers/echo-ai/node_modules/
+workers/echo-ai/.wrangler/

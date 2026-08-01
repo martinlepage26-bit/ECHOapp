@@ -7,6 +7,8 @@ ECHO is never welded to a single vendor again.
 Select with SPEECH_PROVIDER:
 
   piper      (default) — neural TTS running locally. Free, offline, no key, no metering.
+  workers_ai           — Cloudflare Workers AI edge (Aura-2 TTS + Whisper STT).
+                         Needs WORKERS_AI_URL (+ WORKERS_AI_TOKEN when the Worker keys).
   elevenlabs           — premium hosted voices. Needs ELEVENLABS_API_KEY. Billed per character.
   openai               — hosted. Needs OPENAI_API_KEY. Billed per character.
 
@@ -14,6 +16,10 @@ Piper is the default because ECHO reads back long drafts, which is the most char
 workload there is, and a readback tool that costs money per paragraph will not get used.
 Piper's voices are neural, not the operating system's speech synthesizer: PRODUCT.md names
 robotic fallback voices as an anti-reference, and system voices are exactly that.
+
+`workers_ai` is the hosted path that stays on Martin's Cloudflare account: deploy
+`workers/echo-ai`, point WORKERS_AI_URL at it, and the Python API becomes a thin
+gate + storage layer in front of Workers AI.
 
 The hosted providers still boot without a key; only synthesis and transcription raise
 SpeechUnavailable, which the API surfaces as a clean 503 rather than a crash.
@@ -52,12 +58,13 @@ class SpeechProvider:
 
     async def synthesize(
         self, text: str, voice_id: str, speed: float
-    ) -> Tuple[str, float]:
-        """Return (base64 mp3, speed actually applied).
+    ) -> Tuple[str, float, str]:
+        """Return (base64 audio, speed actually applied, mime).
 
         The applied speed is returned because providers clamp it to different ranges and
         the caller scales word timings by it. Scaling by the *requested* speed when the
         provider clamped it would drift the readback highlight out of sync with the voice.
+        mime is typically audio/mpeg; Workers AI may return audio/wav for some models.
         """
         raise NotImplementedError
 
@@ -171,7 +178,7 @@ class ElevenLabsProvider(SpeechProvider):
 
     async def synthesize(
         self, text: str, voice_id: str, speed: float
-    ) -> Tuple[str, float]:
+    ) -> Tuple[str, float, str]:
         client = self._get_client()
         applied = max(self.SPEED_MIN, min(speed, self.SPEED_MAX))
 
@@ -195,7 +202,7 @@ class ElevenLabsProvider(SpeechProvider):
         if not chunks:
             raise SpeechUnavailable("ElevenLabs returned empty audio.")
 
-        return base64.b64encode(bytes(chunks)).decode("ascii"), applied
+        return base64.b64encode(bytes(chunks)).decode("ascii"), applied, "audio/mpeg"
 
     async def transcribe(self, data: bytes, filename: str) -> str:
         client = self._get_client()
@@ -250,7 +257,7 @@ class OpenAIProvider(SpeechProvider):
 
     async def synthesize(
         self, text: str, voice_id: str, speed: float
-    ) -> Tuple[str, float]:
+    ) -> Tuple[str, float, str]:
         client = self._get_client()
         applied = max(self.SPEED_MIN, min(speed, self.SPEED_MAX))
         response = await client.audio.speech.create(
@@ -263,7 +270,7 @@ class OpenAIProvider(SpeechProvider):
         audio = response.content
         if not audio:
             raise SpeechUnavailable("OpenAI returned empty audio.")
-        return base64.b64encode(audio).decode("ascii"), applied
+        return base64.b64encode(audio).decode("ascii"), applied, "audio/mpeg"
 
     async def transcribe(self, data: bytes, filename: str) -> str:
         client = self._get_client()
@@ -364,7 +371,7 @@ class PiperProvider(SpeechProvider):
 
     async def synthesize(
         self, text: str, voice_id: str, speed: float
-    ) -> Tuple[str, float]:
+    ) -> Tuple[str, float, str]:
         import asyncio
 
         applied = max(self.SPEED_MIN, min(speed, self.SPEED_MAX))
@@ -372,13 +379,169 @@ class PiperProvider(SpeechProvider):
         mp3 = await asyncio.to_thread(self._synthesize_sync, text, voice_id, applied)
         if not mp3:
             raise SpeechUnavailable("Piper produced no audio.")
-        return base64.b64encode(mp3).decode("ascii"), applied
+        return base64.b64encode(mp3).decode("ascii"), applied, "audio/mpeg"
 
     async def transcribe(self, data: bytes, filename: str) -> str:
         raise SpeechUnavailable(
             "Piper is text-to-speech only. Set SPEECH_PROVIDER to a provider with speech "
-            "recognition (elevenlabs, openai) to use dictation."
+            "recognition (workers_ai, elevenlabs, openai) to use dictation."
         )
+
+
+class WorkersAIProvider(SpeechProvider):
+    """Cloudflare Workers AI via the echo-ai Worker (Aura-2 TTS + Whisper STT).
+
+    The Worker holds the AI binding; this process is a plain HTTPS client. That keeps
+    Workers AI credentials and model routing on the edge, and lets the Python API stay
+    the storage/gate layer for the Expo app.
+    """
+
+    name = "workers_ai"
+
+    SPEED_MIN = 0.5
+    SPEED_MAX = 2.0
+
+    # Fallback catalog if /api/voices is unreachable but synthesis still works.
+    STOCK_VOICES = [
+        {"id": "athena", "name": "Athena", "tag": "clear · narration"},
+        {"id": "luna", "name": "Luna", "tag": "warm · soft"},
+        {"id": "orion", "name": "Orion", "tag": "deep · steady"},
+        {"id": "asteria", "name": "Asteria", "tag": "bright · expressive"},
+        {"id": "hera", "name": "Hera", "tag": "authoritative · news"},
+        {"id": "apollo", "name": "Apollo", "tag": "warm · male"},
+        {"id": "iris", "name": "Iris", "tag": "light · friendly"},
+        {"id": "andromeda", "name": "Andromeda", "tag": "smooth · storytelling"},
+    ]
+
+    def __init__(self) -> None:
+        self._base = (os.environ.get("WORKERS_AI_URL") or "").rstrip("/")
+        self._token = os.environ.get("WORKERS_AI_TOKEN") or os.environ.get(
+            "ECHO_API_KEY"
+        ) or ""
+        self._voices_cache: Optional[List[dict]] = None
+        self.default_voice_id = os.environ.get("WORKERS_AI_DEFAULT_VOICE", "athena")
+
+    def configured(self) -> bool:
+        return bool(self._base)
+
+    def _headers(self, extra: Optional[dict] = None) -> dict:
+        headers = {"Accept": "application/json"}
+        if self._token:
+            headers["X-Echo-Key"] = self._token
+        if extra:
+            headers.update(extra)
+        return headers
+
+    def _require_url(self) -> str:
+        _require(self.configured(), "workers_ai", "WORKERS_AI_URL")
+        return self._base
+
+    async def list_voices(self) -> List[dict]:
+        if self._voices_cache is not None:
+            return self._voices_cache
+
+        if not self.configured():
+            raise SpeechUnavailable(
+                "workers_ai is selected but WORKERS_AI_URL is not set. "
+                "Deploy workers/echo-ai and set WORKERS_AI_URL to its URL."
+            )
+
+        import httpx
+
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                res = await client.get(
+                    f"{self._base}/api/voices", headers=self._headers()
+                )
+            if res.status_code >= 400:
+                raise SpeechUnavailable(
+                    f"workers_ai voice catalog failed HTTP {res.status_code}: "
+                    f"{res.text[:200]}"
+                )
+            payload = res.json()
+            voices = payload.get("voices") or []
+            if not voices:
+                voices = [dict(v) for v in self.STOCK_VOICES]
+            default = payload.get("default") or self.default_voice_id
+            if not any(v.get("id") == default for v in voices):
+                default = voices[0]["id"]
+            self.default_voice_id = default
+            self._voices_cache = voices
+            return voices
+        except SpeechUnavailable:
+            raise
+        except Exception as e:
+            logger.warning(
+                "workers_ai voice catalog unavailable (%s); using stock list",
+                str(e)[:120],
+            )
+            self.default_voice_id = self.STOCK_VOICES[0]["id"]
+            self._voices_cache = [dict(v) for v in self.STOCK_VOICES]
+            return self._voices_cache
+
+    async def synthesize(
+        self, text: str, voice_id: str, speed: float
+    ) -> Tuple[str, float, str]:
+        base = self._require_url()
+        applied = max(self.SPEED_MIN, min(speed or 1.0, self.SPEED_MAX))
+
+        import httpx
+
+        try:
+            async with httpx.AsyncClient(timeout=120.0) as client:
+                res = await client.post(
+                    f"{base}/api/tts/generate",
+                    headers=self._headers({"Content-Type": "application/json"}),
+                    json={"text": text, "voice_id": voice_id, "speed": applied},
+                )
+        except Exception as e:
+            raise SpeechUnavailable(f"workers_ai TTS request failed: {str(e)[:200]}")
+
+        if res.status_code >= 400:
+            detail = res.text[:200]
+            try:
+                detail = res.json().get("detail") or detail
+            except Exception:
+                pass
+            raise SpeechUnavailable(
+                f"workers_ai TTS failed HTTP {res.status_code}: {detail}"
+            )
+
+        payload = res.json()
+        audio_b64 = payload.get("audio_base64") or ""
+        if not audio_b64:
+            raise SpeechUnavailable("workers_ai returned empty audio_base64.")
+        mime = payload.get("mime") or "audio/mpeg"
+        return audio_b64, applied, mime
+
+    async def transcribe(self, data: bytes, filename: str) -> str:
+        base = self._require_url()
+
+        import httpx
+
+        try:
+            async with httpx.AsyncClient(timeout=120.0) as client:
+                res = await client.post(
+                    f"{base}/api/stt/transcribe",
+                    headers=self._headers(),
+                    files={"audio": (filename or "capture.webm", data)},
+                )
+        except Exception as e:
+            raise SpeechUnavailable(f"workers_ai STT request failed: {str(e)[:200]}")
+
+        if res.status_code >= 400:
+            detail = res.text[:200]
+            try:
+                detail = res.json().get("detail") or detail
+            except Exception:
+                pass
+            raise SpeechUnavailable(
+                f"workers_ai STT failed HTTP {res.status_code}: {detail}"
+            )
+
+        payload = res.json()
+        text = (payload.get("transcript") or payload.get("text") or "").strip()
+        return text
 
 
 def _wav_to_mp3(wav_bytes: bytes) -> bytes:
@@ -402,6 +565,11 @@ _PROVIDERS = {
     ElevenLabsProvider.name: ElevenLabsProvider,
     OpenAIProvider.name: OpenAIProvider,
     PiperProvider.name: PiperProvider,
+    WorkersAIProvider.name: WorkersAIProvider,
+    # Aliases
+    "cloudflare": WorkersAIProvider,
+    "cf": WorkersAIProvider,
+    "workers-ai": WorkersAIProvider,
 }
 
 _active: Optional[SpeechProvider] = None

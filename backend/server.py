@@ -1,16 +1,17 @@
 import io
 import logging
 import os
+import time
 import uuid
+from collections import defaultdict, deque
 from datetime import datetime, timezone
 from hmac import compare_digest
 from pathlib import Path
-from typing import List, Optional
+from typing import Deque, Dict, List, Optional
 
 from dotenv import load_dotenv
-from fastapi import APIRouter, Depends, FastAPI, File, Header, HTTPException, UploadFile
-from fastapi.responses import JSONResponse
-from fastapi.staticfiles import StaticFiles
+from fastapi import APIRouter, Depends, FastAPI, File, Header, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, Field
 from starlette.middleware.cors import CORSMiddleware
@@ -50,16 +51,27 @@ def get_db():
     return _mongo_client[db_name]
 
 
-# Shared-secret gate. TTS and STT spend metered vendor credits per call, so on any public
-# URL they must not be open to drive-by traffic. Enforced only when ECHO_API_KEY is set;
-# local development without it stays frictionless, but a public deploy must set it.
+# Shared-secret gate. TTS/STT/parse-file and storage write paths must not be open to
+# drive-by traffic on a public URL. Enforced only when ECHO_API_KEY is set; local
+# development without it stays frictionless.
+#
+# The web client ships the same value as EXPO_PUBLIC_ECHO_KEY (compiled into the
+# bundle). Treat it as a shared gate + rate-limit key, not a user secret: anyone
+# who loads the page can extract it. Public deploys still need rate limits (below)
+# and preferably a reverse-proxy or session layer in front.
 ECHO_API_KEY = os.environ.get("ECHO_API_KEY") or ""
 
 if not ECHO_API_KEY:
     logger.warning(
-        "ECHO_API_KEY is not set: the metered TTS/STT endpoints are UNPROTECTED. "
+        "ECHO_API_KEY is not set: metered and storage endpoints are UNPROTECTED. "
         "Set it before exposing this server on a public URL."
     )
+
+# Soft rate limit for expensive routes. Key is client IP. Defaults are generous for
+# solo use; tighten via env on a public tunnel.
+RATE_LIMIT_WINDOW_S = int(os.environ.get("ECHO_RATE_LIMIT_WINDOW_S", "60"))
+RATE_LIMIT_MAX = int(os.environ.get("ECHO_RATE_LIMIT_MAX", "30"))
+_rate_buckets: Dict[str, Deque[float]] = defaultdict(deque)
 
 
 async def require_api_key(x_echo_key: str = Header(default="")) -> None:
@@ -67,6 +79,29 @@ async def require_api_key(x_echo_key: str = Header(default="")) -> None:
         return
     if not compare_digest(x_echo_key, ECHO_API_KEY):
         raise HTTPException(status_code=401, detail="Invalid or missing X-Echo-Key.")
+
+
+async def rate_limit_expensive(request: Request) -> None:
+    """Bound TTS/STT/parse traffic per IP so a leaked client key cannot run unbounded."""
+    if RATE_LIMIT_MAX <= 0:
+        return
+    client = request.client.host if request.client else "unknown"
+    now = time.monotonic()
+    bucket = _rate_buckets[client]
+    cutoff = now - RATE_LIMIT_WINDOW_S
+    while bucket and bucket[0] < cutoff:
+        bucket.popleft()
+    if len(bucket) >= RATE_LIMIT_MAX:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Rate limit exceeded: {RATE_LIMIT_MAX} requests per {RATE_LIMIT_WINDOW_S}s.",
+        )
+    bucket.append(now)
+
+
+# Applied to every route that spends vendor credits or writes user content.
+_protected = [Depends(require_api_key), Depends(rate_limit_expensive)]
+_auth_only = [Depends(require_api_key)]
 
 
 app = FastAPI(title="ECHO Backend")
@@ -230,7 +265,7 @@ async def get_sample_text():
 @api_router.post(
     "/tts/generate",
     response_model=TTSResponse,
-    dependencies=[Depends(require_api_key)],
+    dependencies=_protected,
 )
 async def generate_tts(req: TTSRequest):
     source_text = (req.text or "").strip()
@@ -263,7 +298,7 @@ async def generate_tts(req: TTSRequest):
     )
 
     try:
-        audio_b64, speed = await provider.synthesize(
+        audio_b64, speed, mime = await provider.synthesize(
             text=text, voice_id=voice_id, speed=req.speed or 1.0
         )
     except SpeechUnavailable as e:
@@ -293,7 +328,7 @@ async def generate_tts(req: TTSRequest):
 
     return TTSResponse(
         audio_base64=audio_b64,
-        mime="audio/mpeg",
+        mime=mime or "audio/mpeg",
         voice_id=voice_id,
         word_count=len(timings),
         char_count=len(text),
@@ -305,7 +340,7 @@ async def generate_tts(req: TTSRequest):
 @api_router.post(
     "/stt/transcribe",
     response_model=STTResponse,
-    dependencies=[Depends(require_api_key)],
+    dependencies=_protected,
 )
 async def transcribe(audio: UploadFile = File(...)):
     if not audio.filename:
@@ -345,7 +380,7 @@ async def transcribe(audio: UploadFile = File(...)):
 @api_router.post(
     "/parse-file",
     response_model=ParseFileResponse,
-    dependencies=[Depends(require_api_key)],
+    dependencies=_protected,
 )
 async def parse_file(file: UploadFile = File(...)):
     if not file.filename:
@@ -386,27 +421,27 @@ async def parse_file(file: UploadFile = File(...)):
     )
 
 
-@api_router.post("/drafts", response_model=Draft)
+@api_router.post("/drafts", response_model=Draft, dependencies=_auth_only)
 async def save_draft(payload: DraftCreate):
     draft = Draft(**payload.dict())
     await get_db().drafts.insert_one(draft.dict())
     return draft
 
 
-@api_router.get("/drafts", response_model=List[Draft])
+@api_router.get("/drafts", response_model=List[Draft], dependencies=_auth_only)
 async def list_drafts():
     rows = await get_db().drafts.find({}, {"_id": 0}).sort("created_at", -1).to_list(200)
     return [Draft(**r) for r in rows]
 
 
-@api_router.post("/transcripts", response_model=Transcript)
+@api_router.post("/transcripts", response_model=Transcript, dependencies=_auth_only)
 async def save_transcript(payload: TranscriptCreate):
     doc = Transcript(**payload.dict())
     await get_db().transcripts.insert_one(doc.dict())
     return doc
 
 
-@api_router.get("/transcripts", response_model=List[Transcript])
+@api_router.get("/transcripts", response_model=List[Transcript], dependencies=_auth_only)
 async def list_transcripts():
     rows = (
         await get_db().transcripts.find({}, {"_id": 0}).sort("created_at", -1).to_list(200)
@@ -414,7 +449,7 @@ async def list_transcripts():
     return [Transcript(**r) for r in rows]
 
 
-@api_router.delete("/drafts/{draft_id}")
+@api_router.delete("/drafts/{draft_id}", dependencies=_auth_only)
 async def delete_draft(draft_id: str):
     res = await get_db().drafts.delete_one({"id": draft_id})
     if res.deleted_count == 0:
@@ -422,7 +457,7 @@ async def delete_draft(draft_id: str):
     return {"deleted": res.deleted_count, "id": draft_id}
 
 
-@api_router.delete("/transcripts/{transcript_id}")
+@api_router.delete("/transcripts/{transcript_id}", dependencies=_auth_only)
 async def delete_transcript(transcript_id: str):
     res = await get_db().transcripts.delete_one({"id": transcript_id})
     if res.deleted_count == 0:
@@ -436,10 +471,24 @@ async def delete_transcript(transcript_id: str):
 
 app.include_router(api_router)
 
+# CORS: never pair allow_origins=["*"] with allow_credentials=True (browsers reject it
+# and it is a bad public posture). Same-origin static serve needs no CORS at all.
+# Split-origin local dev: set CORS_ORIGINS=http://localhost:8081,http://127.0.0.1:8081
+_cors_raw = (os.environ.get("CORS_ORIGINS") or "").strip()
+if not _cors_raw:
+    _cors_origins: List[str] = []
+    _cors_credentials = False
+elif _cors_raw == "*":
+    _cors_origins = ["*"]
+    _cors_credentials = False
+else:
+    _cors_origins = [o.strip() for o in _cors_raw.split(",") if o.strip()]
+    _cors_credentials = True
+
 app.add_middleware(
     CORSMiddleware,
-    allow_credentials=True,
-    allow_origins=["*"],
+    allow_credentials=_cors_credentials,
+    allow_origins=_cors_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -452,10 +501,74 @@ async def shutdown_db_client():
 
 
 # Serve the exported Expo web build from the same origin as the API, when it exists. One
-# origin means one URL to publish and no CORS surface. Mounted last so /api always wins.
+# origin means one URL to publish and no CORS surface. Expo static export writes
+# `readback.html` (not `readback/index.html`); Starlette StaticFiles html=True does not
+# map clean routes, so we resolve the same way as frontend/scripts/serve-export.mjs.
 _web_dist = ROOT_DIR.parent / "frontend" / "dist"
+_WEB_TYPES = {
+    ".css": "text/css; charset=utf-8",
+    ".html": "text/html; charset=utf-8",
+    ".ico": "image/x-icon",
+    ".js": "application/javascript; charset=utf-8",
+    ".json": "application/json; charset=utf-8",
+    ".map": "application/json; charset=utf-8",
+    ".png": "image/png",
+    ".svg": "image/svg+xml",
+    ".txt": "text/plain; charset=utf-8",
+    ".woff": "font/woff",
+    ".woff2": "font/woff2",
+}
+
+
+def _resolve_web_file(url_path: str) -> Optional[Path]:
+    if not _web_dist.is_dir():
+        return None
+    # Normalize and block path escape.
+    raw = (url_path or "").split("?", 1)[0].split("#", 1)[0]
+    stripped = raw.lstrip("/")
+    if ".." in Path(stripped).parts:
+        return None
+
+    candidate = _web_dist / stripped if stripped else _web_dist
+    if candidate.is_file():
+        return candidate
+    if candidate.is_dir():
+        index = candidate / "index.html"
+        if index.is_file():
+            return index
+    if stripped and not Path(stripped).suffix:
+        html = _web_dist / f"{stripped}.html"
+        if html.is_file():
+            return html
+    if not stripped:
+        root = _web_dist / "index.html"
+        if root.is_file():
+            return root
+    not_found = _web_dist / "+not-found.html"
+    return not_found if not_found.is_file() else None
+
+
 if _web_dist.is_dir():
-    app.mount("/", StaticFiles(directory=str(_web_dist), html=True), name="web")
-    logger.info("serving web build from %s", _web_dist)
+
+    @app.get("/{full_path:path}")
+    async def serve_web(full_path: str):
+        # /api is owned by the router; this catch-all only runs when no API route matched.
+        if full_path == "api" or full_path.startswith("api/"):
+            raise HTTPException(status_code=404, detail="Not found")
+        target = _resolve_web_file(full_path)
+        if target is None:
+            raise HTTPException(status_code=404, detail="Not found")
+        media = _WEB_TYPES.get(target.suffix.lower(), "application/octet-stream")
+        status = 404 if target.name == "+not-found.html" else 200
+        return FileResponse(target, media_type=media, status_code=status)
+
+    @app.get("/")
+    async def serve_web_root():
+        target = _resolve_web_file("")
+        if target is None:
+            raise HTTPException(status_code=404, detail="Not found")
+        return FileResponse(target, media_type="text/html; charset=utf-8")
+
+    logger.info("serving web build from %s (clean Expo routes)", _web_dist)
 else:
     logger.info("no web build at %s; API only", _web_dist)
