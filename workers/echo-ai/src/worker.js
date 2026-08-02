@@ -10,7 +10,7 @@
  *   POST   /api/stt/transcribe — multipart field "audio" → STTResponse (auto-saved to D1)
  *   GET/POST/DELETE /api/drafts[/:id]       — D1-backed, requires env.DB
  *   GET/POST/DELETE /api/transcripts[/:id]  — D1-backed, requires env.DB
- *   POST   /api/parse-file    — multipart field "file"; .txt/.md/.docx (.pdf unsupported on edge)
+ *   POST   /api/parse-file    — multipart field "file"; .txt/.md/.docx/.pdf
  *
  * Legacy: POST /api/echo-tts, /api/echo-transcribe
  *
@@ -18,6 +18,7 @@
  */
 
 import { strFromU8, unzipSync } from "fflate";
+import { extractText, getDocumentProxy } from "unpdf";
 
 const DEFAULT_TTS_MODEL = "@cf/deepgram/aura-2-en";
 const DEFAULT_STT_MODEL = "@cf/openai/whisper-large-v3-turbo";
@@ -341,7 +342,7 @@ function storageUnavailable(origin) {
   );
 }
 
-// --- File parsing (.txt/.md/.docx — no PDF parser on the edge runtime). ----
+// --- File parsing (.txt/.md/.docx/.pdf). ------------------------------------
 
 class ParseError extends Error {
   constructor(status, detail) {
@@ -388,7 +389,24 @@ function extractDocxText(bytes) {
   return lines.filter((l) => l.length).join("\n");
 }
 
-function parseUploadedFile(bytes, filename) {
+/** unpdf wraps a serverless build of pdf.js with no `canvas` dependency and the worker
+ *  inlined, which is what makes it loadable under workerd (plain pdfjs-dist and
+ *  Node-native libs like pdf-parse are not). */
+async function extractPdfText(bytes) {
+  let doc;
+  try {
+    doc = await getDocumentProxy(bytes);
+  } catch (e) {
+    throw new ParseError(415, `Could not read .pdf: ${String(e?.message || e).slice(0, 160)}`);
+  }
+  const { text } = await extractText(doc, { mergePages: true });
+  if (!text || !text.trim()) {
+    throw new ParseError(415, "No extractable text found in this .pdf (it may be scanned/image-only).");
+  }
+  return text;
+}
+
+async function parseUploadedFile(bytes, filename) {
   const name = (filename || "").toLowerCase();
   if (name.endsWith(".txt") || name.endsWith(".md")) {
     return new TextDecoder("utf-8", { fatal: false }).decode(bytes);
@@ -397,12 +415,9 @@ function parseUploadedFile(bytes, filename) {
     return extractDocxText(bytes);
   }
   if (name.endsWith(".pdf")) {
-    throw new ParseError(
-      415,
-      "PDF parsing isn't available on the edge deploy yet. Paste the text directly, or use .txt, .md, or .docx.",
-    );
+    return extractPdfText(bytes);
   }
-  throw new ParseError(415, "Unsupported file type. Use .txt, .md, or .docx.");
+  throw new ParseError(415, "Unsupported file type. Use .txt, .md, .docx, or .pdf.");
 }
 
 const SAMPLE_TEXT =
@@ -674,7 +689,7 @@ export default {
 
         let text;
         try {
-          text = parseUploadedFile(bytes, file.name || "file");
+          text = await parseUploadedFile(bytes, file.name || "file");
         } catch (e) {
           if (e instanceof ParseError) return json({ detail: e.detail }, e.status, responseOrigin);
           return json(
