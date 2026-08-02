@@ -361,6 +361,7 @@ class PiperProvider(SpeechProvider):
         "en_GB-southern_english_female-low": ("Southern English", "british female · warm"),
         "en_GB-cori-medium": ("Cori", "british female · bright"),
         "en_GB-alba-medium": ("Alba", "scottish female · clear"),
+        "fr_FR-tom-medium": ("Tom", "french male · warm · clear"),
     }
 
     DEFAULT = "en_GB-jenny_dioco-medium"

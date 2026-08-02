@@ -47,6 +47,12 @@ VOICE_CATALOG = {
     "martin-fr": ("Martin FR", "français · custom", "martin-fr.mp3"),
 }
 
+# INTERIM pending OpenVoice V2 (patricia/martin-fr voice cloning is English-only via
+# SpeechT5 today) — Piper gives correct French pronunciation but NOT Patricia's/Martin's
+# actual cloned voice. See docs/handoff/ for the real fix.
+_FRENCH_FALLBACK_IDS = {"patricia", "martin-fr"}
+_FRENCH_FALLBACK_VOICE = "fr_FR-tom-medium"
+
 
 class CloneTTSEngine:
     """Lazy-loaded SpeechT5 engine with cached speaker embeddings."""
@@ -59,6 +65,7 @@ class CloneTTSEngine:
         self._vocoder = None
         self._spk = None
         self._embeddings: Dict[str, "torch.Tensor"] = {}
+        self._french_fallback_voice = None
 
     def available_voices(self) -> List[dict]:
         voices = []
@@ -118,17 +125,51 @@ class CloneTTSEngine:
             emb = self._torch.nn.functional.pad(emb, (0, 512 - emb.shape[-1]))
         return emb
 
+    def _load_french_fallback_voice(self):
+        """Lazily load the Piper fr_FR fallback voice (same resolution as PiperProvider)."""
+        if self._french_fallback_voice is None:
+            from piper import PiperVoice
+
+            voice_dir = Path(
+                os.environ.get("PIPER_VOICE_DIR")
+                or Path.home() / ".local" / "share" / "piper-voices"
+            )
+            path = voice_dir / f"{_FRENCH_FALLBACK_VOICE}.onnx"
+            if not path.is_file():
+                raise RuntimeError(
+                    f"French fallback voice model not found: {path}. Download "
+                    f"{_FRENCH_FALLBACK_VOICE}.onnx (+ .onnx.json) from "
+                    f"https://huggingface.co/rhasspy/piper-voices/tree/main/fr/fr_FR/tom/medium"
+                )
+            self._french_fallback_voice = PiperVoice.load(str(path))
+        return self._french_fallback_voice
+
+    def _synthesize_french_fallback(self, text: str, speed: float) -> bytes:
+        from piper import SynthesisConfig
+
+        voice = self._load_french_fallback_voice()
+        buf = io.BytesIO()
+        with wave.open(buf, "wb") as wf:
+            voice.synthesize_wav(
+                text, wf, syn_config=SynthesisConfig(length_scale=1.0 / (speed or 1.0))
+            )
+        return buf.getvalue()
+
     def synthesize(self, text: str, voice_id: str, speed: float = 1.0) -> Tuple[bytes, str]:
         """Return (wav_bytes, mime). Speed is currently ignored (open-source path)."""
+        text = (text or "").strip()
+        if not text:
+            raise RuntimeError("Text is required.")
+
+        if voice_id in _FRENCH_FALLBACK_IDS:
+            return self._synthesize_french_fallback(text, speed), "audio/wav"
+
         self._ensure_loaded()
         if voice_id not in self._embeddings:
             raise RuntimeError(
                 f"Voice {voice_id!r} has no sample under {self.samples_dir}. "
                 f"Available: {sorted(self._embeddings)}"
             )
-        text = (text or "").strip()
-        if not text:
-            raise RuntimeError("Text is required.")
         # SpeechT5 is unstable on very long inputs; chunk by sentences.
         chunks = _chunk_text(text, max_chars=280)
         pieces = []
