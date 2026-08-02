@@ -1,3 +1,18 @@
+> **STALE — do not treat as current architecture.** This file describes the original
+> `emergentintegrations`/OpenAI-only + MongoDB-via-Motor scaffold from before the
+> `3e05016` Emergent decouple. It predates the `SPEECH_PROVIDER` abstraction (Piper
+> default; `workers_ai`, `elevenlabs`, `openai`, local SpeechT5 clone as options),
+> Cloudflare Workers AI, D1, and the local clone-voice provider.
+>
+> For current facts, read (in this order):
+> - `PRODUCT.md` — brand, users, design principles (still current)
+> - `docs/handoff/echo-workers-ai-2026-08-01.md` — live Workers AI wiring
+> - `backend/speech_providers.py` — provider abstraction and defaults
+> - `backend/clone_tts.py` — local SpeechT5 clone-voice provider
+> - `workers/echo-ai/README.md` — the separate D1-backed full Cloudflare Workers stack
+>
+> This file is kept for historical record of the original product shape only.
+
 # ECHO — Voice Reader & Dictation
 
 A native Expo mobile app inspired by **martin.govern-ai.ca/echo/** — a browser-native voice reader. ECHO lets you listen to your drafts out loud with live word tracking, and record/import audio to transcribe on demand.

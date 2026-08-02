@@ -117,3 +117,7 @@ backend/cloudflared.log
 *.log
 workers/echo-ai/node_modules/
 workers/echo-ai/.wrangler/
+
+# Test run output (regenerates per-run; one-time accidental Emergent-scaffold
+# commit, never updated since)
+test_reports/
