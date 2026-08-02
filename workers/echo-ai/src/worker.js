@@ -3,23 +3,28 @@
  *
  * Static Expo UI is served via the ASSETS binding (frontend/dist).
  * API routes (run_worker_first = /api/*):
- *   GET  /api/              — health
- *   GET  /api/voices        — voice catalog
- *   GET  /api/sample-text   — sample draft
- *   POST /api/tts/generate  — JSON {text, voice_id, speed} → TTSResponse
- *   POST /api/stt/transcribe — multipart field "audio" → STTResponse
- *   *    /api/drafts|transcripts|parse-file — 503 (Mongo/storage not on edge)
+ *   GET    /api/              — health
+ *   GET    /api/voices        — voice catalog
+ *   GET    /api/sample-text   — sample draft
+ *   POST   /api/tts/generate  — JSON {text, voice_id, speed} → TTSResponse
+ *   POST   /api/stt/transcribe — multipart field "audio" → STTResponse (auto-saved to D1)
+ *   GET/POST/DELETE /api/drafts[/:id]       — D1-backed, requires env.DB
+ *   GET/POST/DELETE /api/transcripts[/:id]  — D1-backed, requires env.DB
+ *   POST   /api/parse-file    — multipart field "file"; .txt/.md/.docx (.pdf unsupported on edge)
  *
  * Legacy: POST /api/echo-tts, /api/echo-transcribe
  *
  * Auth: X-Echo-Key (or Authorization: Bearer) must match ECHO_API_KEY when set.
  */
 
+import { strFromU8, unzipSync } from "fflate";
+
 const DEFAULT_TTS_MODEL = "@cf/deepgram/aura-2-en";
 const DEFAULT_STT_MODEL = "@cf/openai/whisper-large-v3-turbo";
 const DEFAULT_VOICE = "athena";
 const MAX_TTS_CHARS = 4000;
 const MAX_STT_BYTES = 24 * 1024 * 1024;
+const MAX_PARSE_BYTES = 12 * 1024 * 1024;
 
 /** Aura-2 English speakers with short UI tags (name · style). */
 const AURA_VOICES = [
@@ -272,6 +277,134 @@ function pathOf(url) {
   return url.pathname.replace(/\/+$/, "") || "/";
 }
 
+// --- D1-backed drafts/transcripts (Library tab). ---------------------------
+
+function nowIso() {
+  return new Date().toISOString();
+}
+
+async function d1CreateDraft(env, title, text) {
+  const id = crypto.randomUUID();
+  const created_at = nowIso();
+  await env.DB.prepare(
+    "INSERT INTO drafts (id, title, text, created_at) VALUES (?, ?, ?, ?)",
+  )
+    .bind(id, title, text, created_at)
+    .run();
+  return { id, title, text, created_at };
+}
+
+async function d1ListDrafts(env) {
+  const { results } = await env.DB.prepare(
+    "SELECT id, title, text, created_at FROM drafts ORDER BY created_at DESC LIMIT 200",
+  ).all();
+  return results || [];
+}
+
+async function d1DeleteDraft(env, id) {
+  const res = await env.DB.prepare("DELETE FROM drafts WHERE id = ?").bind(id).run();
+  return res.meta?.changes || 0;
+}
+
+async function d1CreateTranscript(env, text, duration) {
+  const id = crypto.randomUUID();
+  const created_at = nowIso();
+  await env.DB.prepare(
+    "INSERT INTO transcripts (id, text, duration, created_at) VALUES (?, ?, ?, ?)",
+  )
+    .bind(id, text, duration ?? null, created_at)
+    .run();
+  return { id, text, duration: duration ?? null, created_at };
+}
+
+async function d1ListTranscripts(env) {
+  const { results } = await env.DB.prepare(
+    "SELECT id, text, duration, created_at FROM transcripts ORDER BY created_at DESC LIMIT 200",
+  ).all();
+  return results || [];
+}
+
+async function d1DeleteTranscript(env, id) {
+  const res = await env.DB.prepare("DELETE FROM transcripts WHERE id = ?").bind(id).run();
+  return res.meta?.changes || 0;
+}
+
+function storageUnavailable(origin) {
+  return json(
+    {
+      detail:
+        "Storage unavailable: D1 database not bound on this Worker. Run the echo-ai D1 " +
+        "migration (migrations/0001_init.sql) and add the [[d1_databases]] binding, then redeploy.",
+    },
+    503,
+    origin,
+  );
+}
+
+// --- File parsing (.txt/.md/.docx — no PDF parser on the edge runtime). ----
+
+class ParseError extends Error {
+  constructor(status, detail) {
+    super(detail);
+    this.status = status;
+    this.detail = detail;
+  }
+}
+
+const XML_ENTITIES = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'" };
+
+function decodeXmlEntities(s) {
+  return s.replace(/&(amp|lt|gt|quot|apos|#\d+|#x[0-9a-fA-F]+);/g, (whole, ent) => {
+    if (ent[0] === "#") {
+      const isHex = ent[1] === "x" || ent[1] === "X";
+      const code = isHex ? parseInt(ent.slice(2), 16) : parseInt(ent.slice(1), 10);
+      return Number.isFinite(code) ? String.fromCodePoint(code) : whole;
+    }
+    return XML_ENTITIES[ent] ?? whole;
+  });
+}
+
+/** Minimal OOXML text extraction: word/document.xml, paragraph-joined, mirrors python-docx's
+ *  paragraph-per-line behaviour used by the Python API's _extract_docx. */
+function extractDocxText(bytes) {
+  let zip;
+  try {
+    zip = unzipSync(bytes);
+  } catch {
+    throw new ParseError(415, "Could not read .docx: not a valid zip archive.");
+  }
+  const entry = zip["word/document.xml"];
+  if (!entry) {
+    throw new ParseError(415, "Could not find word/document.xml inside the .docx file.");
+  }
+  const xml = strFromU8(entry);
+  const paragraphs = xml.match(/<w:p[ >][\s\S]*?<\/w:p>/g) || [];
+  const lines = paragraphs.map((p) => {
+    const runs = p.match(/<w:t[^>]*>[\s\S]*?<\/w:t>/g) || [];
+    return runs
+      .map((r) => decodeXmlEntities(r.replace(/^<w:t[^>]*>/, "").replace(/<\/w:t>$/, "")))
+      .join("");
+  });
+  return lines.filter((l) => l.length).join("\n");
+}
+
+function parseUploadedFile(bytes, filename) {
+  const name = (filename || "").toLowerCase();
+  if (name.endsWith(".txt") || name.endsWith(".md")) {
+    return new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+  }
+  if (name.endsWith(".docx")) {
+    return extractDocxText(bytes);
+  }
+  if (name.endsWith(".pdf")) {
+    throw new ParseError(
+      415,
+      "PDF parsing isn't available on the edge deploy yet. Paste the text directly, or use .txt, .md, or .docx.",
+    );
+  }
+  throw new ParseError(415, "Unsupported file type. Use .txt, .md, or .docx.");
+}
+
 const SAMPLE_TEXT =
   "ECHO is a browser-native reading surface for listening to drafts out loud. " +
   "Paste text or import a document, choose a voice profile, and hear the language " +
@@ -319,6 +452,7 @@ export default {
             default_voice: defaultVoiceId(env, catalog),
             voices: catalog.length,
           },
+          storage: env.DB ? "d1" : "unavailable",
         },
         200,
         responseOrigin,
@@ -341,23 +475,6 @@ export default {
 
     if (request.method === "GET" && path === "/api/sample-text") {
       return json({ text: SAMPLE_TEXT }, 200, responseOrigin);
-    }
-
-    // Storage routes need Mongo on the Python API — not available on pure edge deploy.
-    if (
-      path.startsWith("/api/drafts") ||
-      path.startsWith("/api/transcripts") ||
-      path === "/api/parse-file"
-    ) {
-      return json(
-        {
-          detail:
-            "Library storage and file parse are not on the Cloudflare edge deploy. " +
-            "Readback and dictation work; use the Python API for drafts/import.",
-        },
-        503,
-        responseOrigin,
-      );
     }
 
     // Everything below is gated when ECHO_API_KEY is set.
@@ -449,8 +566,20 @@ export default {
           return json({ detail: "Audio over 24 MB." }, 413, responseOrigin);
         }
         const result = await transcribe(env, bytes, filename);
-        const id = crypto.randomUUID();
-        const created_at = new Date().toISOString();
+        let id = crypto.randomUUID();
+        let created_at = new Date().toISOString();
+        if (env.DB) {
+          // Mirrors the Python API, which auto-saves every transcription to Mongo so it
+          // shows up in Library without an extra save step. Storage failure must not break
+          // dictation itself — the transcript still returns to the caller either way.
+          try {
+            const saved = await d1CreateTranscript(env, result.text, null);
+            id = saved.id;
+            created_at = saved.created_at;
+          } catch (e) {
+            console.error("transcript autosave failed", e);
+          }
+        }
         return json(
           {
             id,
@@ -467,6 +596,99 @@ export default {
             "X-Echo-Backend": "Cloudflare Workers AI",
             "X-Echo-Model": result.model,
           },
+        );
+      }
+
+      // --- Drafts (D1) ---
+      if (path === "/api/drafts" && request.method === "GET") {
+        if (!env.DB) return storageUnavailable(responseOrigin);
+        return json(await d1ListDrafts(env), 200, responseOrigin);
+      }
+      if (path === "/api/drafts" && request.method === "POST") {
+        if (!env.DB) return storageUnavailable(responseOrigin);
+        let body;
+        try {
+          body = await request.json();
+        } catch {
+          return json({ detail: "Request body must be valid JSON." }, 400, responseOrigin);
+        }
+        const text = String(body.text || "").trim();
+        if (!text) return json({ detail: "Text is required." }, 400, responseOrigin);
+        const title = String(body.title || "").trim() || "Untitled draft";
+        return json(await d1CreateDraft(env, title, text), 200, responseOrigin);
+      }
+      const draftMatch = path.match(/^\/api\/drafts\/([^/]+)$/);
+      if (draftMatch && request.method === "DELETE") {
+        if (!env.DB) return storageUnavailable(responseOrigin);
+        const changes = await d1DeleteDraft(env, draftMatch[1]);
+        if (!changes) return json({ detail: "Draft not found" }, 404, responseOrigin);
+        return json({ deleted: changes, id: draftMatch[1] }, 200, responseOrigin);
+      }
+
+      // --- Transcripts (D1) ---
+      if (path === "/api/transcripts" && request.method === "GET") {
+        if (!env.DB) return storageUnavailable(responseOrigin);
+        return json(await d1ListTranscripts(env), 200, responseOrigin);
+      }
+      if (path === "/api/transcripts" && request.method === "POST") {
+        if (!env.DB) return storageUnavailable(responseOrigin);
+        let body;
+        try {
+          body = await request.json();
+        } catch {
+          return json({ detail: "Request body must be valid JSON." }, 400, responseOrigin);
+        }
+        const text = String(body.text || "").trim();
+        if (!text) return json({ detail: "Text is required." }, 400, responseOrigin);
+        const duration = typeof body.duration === "number" ? body.duration : null;
+        return json(await d1CreateTranscript(env, text, duration), 200, responseOrigin);
+      }
+      const transcriptMatch = path.match(/^\/api\/transcripts\/([^/]+)$/);
+      if (transcriptMatch && request.method === "DELETE") {
+        if (!env.DB) return storageUnavailable(responseOrigin);
+        const changes = await d1DeleteTranscript(env, transcriptMatch[1]);
+        if (!changes) return json({ detail: "Transcript not found" }, 404, responseOrigin);
+        return json({ deleted: changes, id: transcriptMatch[1] }, 200, responseOrigin);
+      }
+
+      // --- File parsing ---
+      if (path === "/api/parse-file" && request.method === "POST") {
+        const contentType = request.headers.get("Content-Type") || "";
+        if (!contentType.includes("multipart/form-data")) {
+          return json(
+            { detail: 'Send the file as multipart/form-data field "file".' },
+            400,
+            responseOrigin,
+          );
+        }
+        const form = await request.formData();
+        const file = form.get("file") || form.get("audio");
+        if (!file || typeof file === "string") {
+          return json({ detail: 'Multipart field "file" is required.' }, 400, responseOrigin);
+        }
+        if (file.size > MAX_PARSE_BYTES) {
+          return json({ detail: "File over 12 MB." }, 413, responseOrigin);
+        }
+        const bytes = new Uint8Array(await file.arrayBuffer());
+        if (!bytes.byteLength) return json({ detail: "Empty file." }, 400, responseOrigin);
+
+        let text;
+        try {
+          text = parseUploadedFile(bytes, file.name || "file");
+        } catch (e) {
+          if (e instanceof ParseError) return json({ detail: e.detail }, e.status, responseOrigin);
+          return json(
+            { detail: `Parse failed: ${String(e?.message || e).slice(0, 200)}` },
+            500,
+            responseOrigin,
+          );
+        }
+        text = text.trim();
+        const words = (text.match(/\S+/g) || []).length;
+        return json(
+          { text, filename: file.name || "file", word_count: words, char_count: text.length },
+          200,
+          responseOrigin,
         );
       }
 

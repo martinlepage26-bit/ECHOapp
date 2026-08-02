@@ -636,6 +636,8 @@ export default function ReadbackScreen() {
                       onPress={onLoadSample}
                       style={styles.toolBtn}
                       testID="load-sample-button"
+                      accessibilityRole="button"
+                      accessibilityLabel="Load sample text"
                     >
                       <Ionicons name="sparkles-outline" size={12} color={colors.textSecondary} />
                       <Text style={styles.toolBtnTxt}>SAMPLE</Text>
@@ -644,6 +646,8 @@ export default function ReadbackScreen() {
                       onPress={onSaveDraft}
                       style={styles.toolBtn}
                       testID="save-draft-button"
+                      accessibilityRole="button"
+                      accessibilityLabel="Save draft to Library"
                     >
                       <Ionicons name="bookmark-outline" size={12} color={colors.amber} />
                       <Text style={[styles.toolBtnTxt, { color: colors.amber }]}>SAVE</Text>
@@ -652,6 +656,8 @@ export default function ReadbackScreen() {
                       onPress={onClear}
                       style={styles.toolBtn}
                       testID="clear-button"
+                      accessibilityRole="button"
+                      accessibilityLabel="Clear draft text"
                     >
                       <Ionicons name="close" size={14} color={colors.textSecondary} />
                       <Text style={styles.toolBtnTxt}>CLEAR</Text>
@@ -664,6 +670,9 @@ export default function ReadbackScreen() {
                   activeOpacity={0.85}
                   style={styles.dropzone}
                   testID="import-file-button"
+                  accessibilityRole="button"
+                  accessibilityLabel={filename ? `Change file, currently ${filename}` : 'Choose a file to import'}
+                  accessibilityHint="Accepts .txt, .md, .docx, or .pdf"
                 >
                   {loading ? (
                     <ActivityIndicator color={colors.amber} />
@@ -694,6 +703,8 @@ export default function ReadbackScreen() {
                     style={styles.textInput}
                     textAlignVertical="top"
                     testID="text-intake-input"
+                    accessibilityLabel="Draft text"
+                    accessibilityHint="Paste or type the text you want read back"
                   />
                 </View>
 
@@ -745,6 +756,9 @@ export default function ReadbackScreen() {
                         }}
                         style={[styles.voiceChip, active && styles.voiceChipActive]}
                         testID={`voice-chip-${voice.id}`}
+                        accessibilityRole="radio"
+                        accessibilityState={{ selected: active }}
+                        accessibilityLabel={`Voice ${voice.name}, ${voice.tag}`}
                       >
                         <Text style={[styles.voiceChipTxt, active && styles.voiceChipTxtActive]}>
                           {voice.name}
@@ -768,6 +782,9 @@ export default function ReadbackScreen() {
                         }}
                         style={[styles.speedChip, speed === value && styles.speedChipActive]}
                         testID={`speed-${value}`}
+                        accessibilityRole="radio"
+                        accessibilityState={{ selected: speed === value }}
+                        accessibilityLabel={`Playback speed ${value}×`}
                       >
                         <Text style={[styles.speedTxt, speed === value && styles.speedTxtActive]}>
                           {value}x
@@ -792,6 +809,8 @@ export default function ReadbackScreen() {
                     onPress={onStop}
                     style={styles.iconBtn}
                     testID="stop-button"
+                    accessibilityRole="button"
+                    accessibilityLabel="Stop playback"
                   >
                     <Ionicons name="stop" size={18} color={colors.textSecondary} />
                   </TouchableOpacity>
@@ -800,6 +819,9 @@ export default function ReadbackScreen() {
                     disabled={generating}
                     style={[styles.playBtn, generating && { opacity: 0.7 }]}
                     testID="play-pause-button"
+                    accessibilityRole="button"
+                    accessibilityLabel={generating ? 'Generating audio' : isPlaying ? 'Pause playback' : 'Play readback'}
+                    accessibilityState={{ disabled: generating, busy: generating }}
                   >
                     <Ionicons
                       name={generating ? 'sync-outline' : isPlaying ? 'pause' : 'play'}

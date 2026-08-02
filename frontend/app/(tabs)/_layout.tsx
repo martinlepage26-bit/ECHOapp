@@ -31,6 +31,7 @@ export default function TabsLayout() {
         name="readback"
         options={{
           title: 'Readback',
+          tabBarAccessibilityLabel: 'Readback',
           tabBarIcon: ({ color, focused }) => (
             <View style={styles.iconWrap}>
               <Ionicons name="headset-outline" size={20} color={color} />
@@ -44,6 +45,7 @@ export default function TabsLayout() {
         name="dictation"
         options={{
           title: 'Dictation',
+          tabBarAccessibilityLabel: 'Dictation',
           tabBarIcon: ({ color, focused }) => (
             <View style={styles.iconWrap}>
               <Ionicons name="mic-outline" size={20} color={color} />
@@ -57,6 +59,7 @@ export default function TabsLayout() {
         name="library"
         options={{
           title: 'Library',
+          tabBarAccessibilityLabel: 'Library',
           tabBarIcon: ({ color, focused }) => (
             <View style={styles.iconWrap}>
               <Ionicons name="albums-outline" size={20} color={color} />

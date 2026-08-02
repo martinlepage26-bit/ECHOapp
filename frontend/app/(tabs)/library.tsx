@@ -203,6 +203,9 @@ export default function LibraryScreen() {
             if (Platform.OS !== 'web') Haptics.selectionAsync();
           }}
           testID="library-tab-drafts"
+          accessibilityRole="tab"
+          accessibilityState={{ selected: tab === 'drafts' }}
+          accessibilityLabel={`Drafts, ${drafts.length}`}
         >
           <Ionicons
             name="document-text-outline"
@@ -225,6 +228,9 @@ export default function LibraryScreen() {
             if (Platform.OS !== 'web') Haptics.selectionAsync();
           }}
           testID="library-tab-transcripts"
+          accessibilityRole="tab"
+          accessibilityState={{ selected: tab === 'transcripts' }}
+          accessibilityLabel={`Transcripts, ${transcripts.length}`}
         >
           <Ionicons
             name="mic-outline"
@@ -367,7 +373,13 @@ function DraftCard({
             {wordCount} words · {formatDate(draft.created_at)}
           </Text>
         </View>
-        <TouchableOpacity onPress={onToggle} style={styles.iconChip} testID={`draft-expand-${index}`}>
+        <TouchableOpacity
+          onPress={onToggle}
+          style={styles.iconChip}
+          testID={`draft-expand-${index}`}
+          accessibilityRole="button"
+          accessibilityLabel={expanded ? 'Collapse draft' : 'Expand draft'}
+        >
           <Ionicons
             name={expanded ? 'chevron-up' : 'chevron-down'}
             size={16}
@@ -385,15 +397,33 @@ function DraftCard({
       </Text>
 
       <View style={styles.cardActions}>
-        <TouchableOpacity style={styles.actionBtn} onPress={onOpen} testID={`draft-open-${index}`}>
+        <TouchableOpacity
+          style={styles.actionBtn}
+          onPress={onOpen}
+          testID={`draft-open-${index}`}
+          accessibilityRole="button"
+          accessibilityLabel={`Read "${draft.title || 'Untitled draft'}" in Readback`}
+        >
           <Ionicons name="play-circle-outline" size={14} color={colors.amber} />
           <Text style={[styles.actionTxt, { color: colors.amber }]}>READ</Text>
         </TouchableOpacity>
-        <TouchableOpacity style={styles.actionBtn} onPress={onCopy} testID={`draft-copy-${index}`}>
+        <TouchableOpacity
+          style={styles.actionBtn}
+          onPress={onCopy}
+          testID={`draft-copy-${index}`}
+          accessibilityRole="button"
+          accessibilityLabel="Copy draft text"
+        >
           <Ionicons name="copy-outline" size={14} color={colors.textSecondary} />
           <Text style={styles.actionTxt}>COPY</Text>
         </TouchableOpacity>
-        <TouchableOpacity style={styles.actionBtn} onPress={onDelete} testID={`draft-delete-${index}`}>
+        <TouchableOpacity
+          style={styles.actionBtn}
+          onPress={onDelete}
+          testID={`draft-delete-${index}`}
+          accessibilityRole="button"
+          accessibilityLabel={`Delete "${draft.title || 'Untitled draft'}"`}
+        >
           <Ionicons name="trash-outline" size={14} color={colors.red} />
           <Text style={[styles.actionTxt, { color: colors.red }]}>DELETE</Text>
         </TouchableOpacity>
@@ -436,7 +466,13 @@ function TranscriptCard({
             {wc} words · {formatDate(t.created_at)}
           </Text>
         </View>
-        <TouchableOpacity onPress={onToggle} style={styles.iconChip} testID={`transcript-expand-${index}`}>
+        <TouchableOpacity
+          onPress={onToggle}
+          style={styles.iconChip}
+          testID={`transcript-expand-${index}`}
+          accessibilityRole="button"
+          accessibilityLabel={expanded ? 'Collapse transcript' : 'Expand transcript'}
+        >
           <Ionicons
             name={expanded ? 'chevron-up' : 'chevron-down'}
             size={16}
@@ -451,15 +487,33 @@ function TranscriptCard({
       </Text>
 
       <View style={styles.cardActions}>
-        <TouchableOpacity style={styles.actionBtn} onPress={onCopy} testID={`transcript-copy-${index}`}>
+        <TouchableOpacity
+          style={styles.actionBtn}
+          onPress={onCopy}
+          testID={`transcript-copy-${index}`}
+          accessibilityRole="button"
+          accessibilityLabel="Copy transcript text"
+        >
           <Ionicons name="copy-outline" size={14} color={colors.textSecondary} />
           <Text style={styles.actionTxt}>COPY</Text>
         </TouchableOpacity>
-        <TouchableOpacity style={styles.actionBtn} onPress={onExport} testID={`transcript-export-${index}`}>
+        <TouchableOpacity
+          style={styles.actionBtn}
+          onPress={onExport}
+          testID={`transcript-export-${index}`}
+          accessibilityRole="button"
+          accessibilityLabel="Export transcript as markdown"
+        >
           <Ionicons name="download-outline" size={14} color={colors.amber} />
           <Text style={[styles.actionTxt, { color: colors.amber }]}>.MD</Text>
         </TouchableOpacity>
-        <TouchableOpacity style={styles.actionBtn} onPress={onDelete} testID={`transcript-delete-${index}`}>
+        <TouchableOpacity
+          style={styles.actionBtn}
+          onPress={onDelete}
+          testID={`transcript-delete-${index}`}
+          accessibilityRole="button"
+          accessibilityLabel="Delete transcript"
+        >
           <Ionicons name="trash-outline" size={14} color={colors.red} />
           <Text style={[styles.actionTxt, { color: colors.red }]}>DELETE</Text>
         </TouchableOpacity>

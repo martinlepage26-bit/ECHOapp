@@ -311,6 +311,11 @@ export default function DictationScreen() {
                 state === 'transcribing' && { opacity: 0.6 },
               ]}
               testID="record-button"
+              accessibilityRole="button"
+              accessibilityLabel={
+                state === 'transcribing' ? 'Transcribing' : isRec ? 'Stop recording' : 'Start recording'
+              }
+              accessibilityState={{ disabled: state === 'transcribing', busy: state === 'transcribing' }}
             >
               {state === 'transcribing' ? (
                 <ActivityIndicator color={colors.amber} size="large" />
@@ -336,6 +341,9 @@ export default function DictationScreen() {
               disabled={isRec || state === 'transcribing'}
               style={styles.ghostBtn}
               testID="import-audio-button"
+              accessibilityRole="button"
+              accessibilityLabel="Import audio clip to transcribe"
+              accessibilityState={{ disabled: isRec || state === 'transcribing' }}
             >
               <Ionicons name="attach-outline" size={14} color={colors.textSecondary} />
               <Text style={styles.ghostBtnTxt}>IMPORT CLIP</Text>
@@ -345,6 +353,9 @@ export default function DictationScreen() {
               disabled={state === 'transcribing'}
               style={styles.ghostBtn}
               testID="clear-transcript-button"
+              accessibilityRole="button"
+              accessibilityLabel="Reset transcript"
+              accessibilityState={{ disabled: state === 'transcribing' }}
             >
               <Ionicons name="refresh" size={14} color={colors.textSecondary} />
               <Text style={styles.ghostBtnTxt}>RESET</Text>
@@ -403,6 +414,8 @@ export default function DictationScreen() {
               onPress={onCopy}
               style={[styles.primaryBtn, styles.flex1, { marginRight: 8 }]}
               testID="copy-transcript-button"
+              accessibilityRole="button"
+              accessibilityLabel={copied ? 'Copied to clipboard' : 'Copy transcript to clipboard'}
             >
               <Ionicons
                 name={copied ? 'checkmark' : 'copy-outline'}
@@ -415,6 +428,8 @@ export default function DictationScreen() {
               onPress={onExport}
               style={[styles.primaryBtn, styles.flex1, { backgroundColor: colors.amber, borderColor: colors.amber }]}
               testID="export-markdown-button"
+              accessibilityRole="button"
+              accessibilityLabel="Export transcript as markdown"
             >
               <Ionicons name="download-outline" size={14} color={colors.bg} />
               <Text style={[styles.primaryBtnTxt, { color: colors.bg, fontWeight: '700' }]}>
