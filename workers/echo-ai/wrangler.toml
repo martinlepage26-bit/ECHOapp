@@ -26,15 +26,12 @@ run_worker_first = ["/api/*"]
 enabled = true
 head_sampling_rate = 1
 
-# Library storage (drafts + transcripts) and /api/parse-file. Not yet provisioned —
-# run `npx wrangler d1 create echo-ai-db`, put the returned database_id below, then
-# `npx wrangler d1 execute echo-ai-db --remote --file=migrations/0001_init.sql`.
-# Until this is bound, drafts/transcripts/parse-file return a clear 503 instead of failing.
-# [[d1_databases]]
-# binding = "DB"
-# database_name = "echo-ai-db"
-# database_id = "REPLACE_WITH_D1_DATABASE_ID"
-# migrations_dir = "migrations"
+# Library storage (drafts + transcripts) and /api/parse-file.
+[[d1_databases]]
+binding = "DB"
+database_name = "echo-ai-db"
+database_id = "08492e49-270b-4926-bacf-68be86b65537"
+migrations_dir = "migrations"
 
 [vars]
 ECHO_TTS_MODEL = "@cf/deepgram/aura-2-en"
