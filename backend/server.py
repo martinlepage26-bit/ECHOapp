@@ -124,7 +124,11 @@ SAMPLE_TEXT = (
 # PROVIDER_CHUNK_CHARS — long drafts are split, synthesized per-chunk, and the audio
 # concatenated back together.
 MAX_TTS_CHARS = 70_000
-PROVIDER_CHUNK_CHARS = 4000  # OpenAI TTS hard limit is 4096; keep buffer
+# OpenAI's hard limit is 4096, but Workers AI's Deepgram Aura-2 hard-rejects over 2000
+# chars per call (error 8007, verified directly against live Workers AI 2026-08-03) — use
+# the tighter bound so text routed through workers_ai (which proxies to that same Worker)
+# doesn't get double-chunked into pieces that are individually still too big.
+PROVIDER_CHUNK_CHARS = 1900
 
 
 # ------------------------------------------------------------------------------

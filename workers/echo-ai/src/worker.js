@@ -28,7 +28,9 @@ const DEFAULT_VOICE = "athena";
 // doesn't get rejected. Individual Workers AI calls still respect PROVIDER_CHUNK_CHARS;
 // long drafts are split, synthesized per-chunk, and the audio concatenated back together.
 const MAX_TTS_CHARS = 70_000;
-const PROVIDER_CHUNK_CHARS = 4000;
+// Deepgram Aura-2 on Workers AI hard-rejects over 2000 chars per call (error 8007) —
+// tighter than OpenAI's 4096. Verified directly against live Workers AI (2026-08-03).
+const PROVIDER_CHUNK_CHARS = 1900;
 const CHUNK_CONCURRENCY = 4; // Workers AI calls are network I/O, not local CPU — safe to parallelize
 const MAX_STT_BYTES = 24 * 1024 * 1024;
 const MAX_PARSE_BYTES = 12 * 1024 * 1024;
