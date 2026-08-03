@@ -23,7 +23,13 @@ import { extractText, getDocumentProxy } from "unpdf";
 const DEFAULT_TTS_MODEL = "@cf/deepgram/aura-2-en";
 const DEFAULT_STT_MODEL = "@cf/openai/whisper-large-v3-turbo";
 const DEFAULT_VOICE = "athena";
-const MAX_TTS_CHARS = 4000;
+// Overall accepted draft length: 10,000 words measures ~60,000 chars in practice
+// (verified against real sample text) — set with headroom so a genuine 10k-word draft
+// doesn't get rejected. Individual Workers AI calls still respect PROVIDER_CHUNK_CHARS;
+// long drafts are split, synthesized per-chunk, and the audio concatenated back together.
+const MAX_TTS_CHARS = 70_000;
+const PROVIDER_CHUNK_CHARS = 4000;
+const CHUNK_CONCURRENCY = 4; // Workers AI calls are network I/O, not local CPU — safe to parallelize
 const MAX_STT_BYTES = 24 * 1024 * 1024;
 const MAX_PARSE_BYTES = 12 * 1024 * 1024;
 
@@ -224,6 +230,96 @@ function buildTtsInput(model, text, voice, speed) {
     text,
     speaker: voice,
     encoding: "mp3",
+  };
+}
+
+/** Split normalized text into <=maxChars pieces for a single Workers AI call.
+ *  Splits on paragraph boundaries first (merging short ones back together so the call
+ *  count stays low), then sentence boundaries, then plain whitespace as a last resort.
+ *  Mirrors backend/speech_text.py's chunk_text_for_synthesis (Python API parity). */
+function chunkText(text, maxChars) {
+  if (text.length <= maxChars) return [text];
+  const chunks = [];
+  let buf = "";
+  for (const para of text.split("\n\n")) {
+    const candidate = buf ? `${buf}\n\n${para}` : para;
+    if (candidate.length <= maxChars) {
+      buf = candidate;
+      continue;
+    }
+    if (buf) {
+      chunks.push(buf);
+      buf = "";
+    }
+    if (para.length <= maxChars) {
+      buf = para;
+      continue;
+    }
+    let start = 0;
+    while (start < para.length) {
+      let end = Math.min(para.length, start + maxChars);
+      if (end < para.length) {
+        const window = para.slice(start, end);
+        const cut = Math.max(
+          window.lastIndexOf(". "), window.lastIndexOf("! "),
+          window.lastIndexOf("? "), window.lastIndexOf(" "),
+        );
+        if (cut > maxChars * 0.4) end = start + cut + 1;
+      }
+      const piece = para.slice(start, end).trim();
+      if (piece) chunks.push(piece);
+      start = end;
+    }
+  }
+  if (buf) chunks.push(buf);
+  return chunks;
+}
+
+async function mapWithConcurrency(items, limit, fn) {
+  const results = new Array(items.length);
+  let next = 0;
+  async function worker() {
+    while (next < items.length) {
+      const i = next++;
+      results[i] = await fn(items[i], i);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
+}
+
+function concatBytes(chunks) {
+  const total = chunks.reduce((sum, c) => sum + c.byteLength, 0);
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const c of chunks) {
+    out.set(c, offset);
+    offset += c.byteLength;
+  }
+  return out;
+}
+
+/** Chunk + synthesize + concatenate for drafts over one Workers AI call's safe size.
+ *  Byte-level MP3 concat, not a re-encode (no ffmpeg/native audio tooling on Workers) —
+ *  each chunk is independently encoded by Aura-2, so very long reads may have faint
+ *  seams at chunk boundaries; acceptable for spoken-word content. Word timings are
+ *  estimated separately over the whole (unchunked) text and don't need to know about
+ *  this split. */
+async function synthesizeLong(env, text, voiceId, speed) {
+  const pieces = chunkText(text, PROVIDER_CHUNK_CHARS);
+  if (pieces.length === 1) {
+    return synthesize(env, text, voiceId, speed);
+  }
+  const results = await mapWithConcurrency(pieces, CHUNK_CONCURRENCY, (piece) =>
+    synthesize(env, piece, voiceId, speed),
+  );
+  const first = results[0];
+  return {
+    bytes: concatBytes(results.map((r) => r.bytes)),
+    mime: first.mime,
+    voice: first.voice,
+    applied: first.applied,
+    model: first.model,
   };
 }
 
@@ -511,7 +607,10 @@ export default {
         if (!text) return json({ detail: "Text is required." }, 400, responseOrigin);
         if (text.length > MAX_TTS_CHARS) {
           return json(
-            { detail: `Text exceeds ${MAX_TTS_CHARS} character limit.` },
+            {
+              detail: `Text exceeds ${MAX_TTS_CHARS.toLocaleString()} characters `
+                + "(roughly 10,000 words). Split into smaller passages.",
+            },
             413,
             responseOrigin,
           );
@@ -519,7 +618,7 @@ export default {
         const voiceId = body.voice_id || body.voiceId || body.voice || "";
         const speed = body.speed ?? (body.rate != null ? 1 + Number(body.rate) / 100 : 1);
 
-        const result = await synthesize(env, text, voiceId, speed);
+        const result = await synthesizeLong(env, text, voiceId, speed);
         const { words, estimated_duration } = estimateWordTimings(text);
         const scaled =
           result.applied && result.applied > 0 && result.applied !== 1

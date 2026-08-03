@@ -56,6 +56,52 @@ def normalize_tts_text(text: str) -> str:
     return "\n\n".join(blocks).strip()
 
 
+def chunk_text_for_synthesis(text: str, max_chars: int) -> List[str]:
+    """Split normalized text into <=max_chars pieces for providers with a per-call limit
+    (OpenAI's hard cap is 4096 chars; others vary but are safe under the same bound).
+
+    Splits on paragraph boundaries first (merging short ones back together so the call
+    count stays low), then sentence boundaries, then plain whitespace as a last resort.
+    Callers synthesize each piece and concatenate the resulting audio — word timings are
+    estimated once over the whole input text and don't need to know about this split.
+    """
+    if len(text) <= max_chars:
+        return [text]
+
+    chunks: List[str] = []
+    buf = ""
+    for para in text.split("\n\n"):
+        candidate = f"{buf}\n\n{para}" if buf else para
+        if len(candidate) <= max_chars:
+            buf = candidate
+            continue
+        if buf:
+            chunks.append(buf)
+            buf = ""
+        if len(para) <= max_chars:
+            buf = para
+            continue
+        # a single paragraph longer than max_chars: split on sentence/word boundaries
+        start = 0
+        while start < len(para):
+            end = min(len(para), start + max_chars)
+            if end < len(para):
+                window = para[start:end]
+                cut = max(
+                    window.rfind(". "), window.rfind("! "),
+                    window.rfind("? "), window.rfind(" "),
+                )
+                if cut > max_chars * 0.4:
+                    end = start + cut + 1
+            piece = para[start:end].strip()
+            if piece:
+                chunks.append(piece)
+            start = end
+    if buf:
+        chunks.append(buf)
+    return chunks
+
+
 def estimate_word_timings(text: str) -> Tuple[List[EstimatedWordTiming], float]:
     tokens = _tokenize(text)
     if not tokens:

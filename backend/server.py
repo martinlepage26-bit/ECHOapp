@@ -1,13 +1,18 @@
+import asyncio
+import base64
 import io
 import logging
 import os
+import subprocess
+import tempfile
 import time
 import uuid
+import wave
 from collections import defaultdict, deque
 from datetime import datetime, timezone
 from hmac import compare_digest
 from pathlib import Path
-from typing import Deque, Dict, List, Optional
+from typing import Deque, Dict, List, Optional, Tuple
 
 from dotenv import load_dotenv
 from fastapi import APIRouter, Depends, FastAPI, File, Header, HTTPException, Request, UploadFile
@@ -17,7 +22,7 @@ from pydantic import BaseModel, Field
 from starlette.middleware.cors import CORSMiddleware
 
 from speech_providers import SpeechUnavailable, get_provider
-from speech_text import estimate_word_timings, normalize_tts_text
+from speech_text import chunk_text_for_synthesis, estimate_word_timings, normalize_tts_text
 
 # ------------------------------------------------------------------------------
 # Setup
@@ -113,7 +118,13 @@ SAMPLE_TEXT = (
     "back with live word tracking."
 )
 
-MAX_TTS_CHARS = 4000  # OpenAI TTS hard limit is 4096; keep buffer
+# Overall accepted draft length: 10,000 words measures ~60,000 chars in practice (verified
+# against real sample text, not just an average-word-length estimate) — set with headroom
+# so a genuine 10k-word draft doesn't get rejected. Individual provider calls still respect
+# PROVIDER_CHUNK_CHARS — long drafts are split, synthesized per-chunk, and the audio
+# concatenated back together.
+MAX_TTS_CHARS = 70_000
+PROVIDER_CHUNK_CHARS = 4000  # OpenAI TTS hard limit is 4096; keep buffer
 
 
 # ------------------------------------------------------------------------------
@@ -207,6 +218,102 @@ def _estimate_word_timings(text: str) -> tuple[List[WordTiming], float]:
     )
 
 
+def _concat_wav(chunks: List[bytes]) -> bytes:
+    """Sample-accurate concat for same-format WAV chunks (SpeechT5/OpenVoice output)."""
+    with wave.open(io.BytesIO(chunks[0]), "rb") as first:
+        params = first.getparams()
+        frames = [first.readframes(first.getnframes())]
+    for raw in chunks[1:]:
+        with wave.open(io.BytesIO(raw), "rb") as wf:
+            frames.append(wf.readframes(wf.getnframes()))
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as out:
+        out.setparams(params)
+        out.writeframes(b"".join(frames))
+    return buf.getvalue()
+
+
+def _concat_mp3(chunks: List[bytes]) -> bytes:
+    """Stream-copy concat for same-codec MP3 chunks via ffmpeg's concat demuxer.
+
+    A lossless container-level join (no re-encode) — safe because every chunk comes from
+    the same provider/voice/settings, so codec parameters match across chunks.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        listing = []
+        for i, raw in enumerate(chunks):
+            part = tmp_path / f"part{i}.mp3"
+            part.write_bytes(raw)
+            listing.append(f"file '{part.name}'")
+        list_file = tmp_path / "list.txt"
+        list_file.write_text("\n".join(listing))
+        out_path = tmp_path / "out.mp3"
+        proc = subprocess.run(
+            [
+                "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+                "-f", "concat", "-safe", "0", "-i", str(list_file),
+                "-c", "copy", str(out_path),
+            ],
+            capture_output=True,
+        )
+        if proc.returncode != 0:
+            raise RuntimeError(f"ffmpeg concat failed: {proc.stderr.decode()[:200]}")
+        return out_path.read_bytes()
+
+
+def _concat_audio(chunks: List[bytes], mime: str) -> bytes:
+    if len(chunks) == 1:
+        return chunks[0]
+    if mime == "audio/wav":
+        return _concat_wav(chunks)
+    return _concat_mp3(chunks)
+
+
+# Piper and the local clone engine (SpeechT5/OpenVoice) run CPU-bound inference in a
+# worker thread per call, not real async I/O — running many at once thrashes this host's
+# CPU instead of speeding anything up (observed directly: onnxruntime thread-affinity
+# warnings and a run that never finished with unbounded concurrency). Hosted providers
+# are true network I/O and benefit from more parallelism.
+_LOCAL_PROVIDER_NAMES = {"piper", "clone"}
+_CHUNK_CONCURRENCY_LOCAL = 2
+_CHUNK_CONCURRENCY_REMOTE = 4
+
+
+async def _synthesize_long_text(
+    synth_provider, text: str, voice_id: str, speed: float
+) -> Tuple[str, float, str]:
+    """Chunk text over PROVIDER_CHUNK_CHARS, synthesize each piece with bounded
+    concurrency, and concatenate the resulting audio into one continuous track. Word
+    timings are estimated separately over the whole (unchunked) text, so this only has
+    to keep the audio contiguous — not track per-chunk offsets."""
+    pieces = chunk_text_for_synthesis(text, PROVIDER_CHUNK_CHARS)
+    if len(pieces) == 1:
+        return await synth_provider.synthesize(text=text, voice_id=voice_id, speed=speed)
+
+    limit = (
+        _CHUNK_CONCURRENCY_LOCAL
+        if getattr(synth_provider, "name", "") in _LOCAL_PROVIDER_NAMES
+        else _CHUNK_CONCURRENCY_REMOTE
+    )
+    semaphore = asyncio.Semaphore(limit)
+
+    async def bounded(piece: str):
+        async with semaphore:
+            return await synth_provider.synthesize(text=piece, voice_id=voice_id, speed=speed)
+
+    logger.info(
+        "synthesizing %d chunks (%d chars), up to %d concurrent (%s)",
+        len(pieces), len(text), limit, getattr(synth_provider, "name", "?"),
+    )
+    results = await asyncio.gather(*(bounded(p) for p in pieces))
+    applied_speed = results[0][1]
+    mime = results[0][2] or "audio/mpeg"
+    audio_bytes = [base64.b64decode(b64) for b64, _speed, _mime in results]
+    combined = _concat_audio(audio_bytes, mime)
+    return base64.b64encode(combined).decode("ascii"), applied_speed, mime
+
+
 def _extract_pdf(data: bytes) -> str:
     from pypdf import PdfReader
 
@@ -293,7 +400,10 @@ async def generate_tts(req: TTSRequest):
     if len(text) > MAX_TTS_CHARS:
         raise HTTPException(
             status_code=413,
-            detail=f"Text exceeds {MAX_TTS_CHARS} character limit. Split into smaller passages.",
+            detail=(
+                f"Text exceeds {MAX_TTS_CHARS:,} characters (roughly 10,000 words). "
+                "Split into smaller passages."
+            ),
         )
 
     provider = get_provider()
@@ -327,8 +437,8 @@ async def generate_tts(req: TTSRequest):
         )
 
     try:
-        audio_b64, speed, mime = await synth_provider.synthesize(
-            text=text, voice_id=voice_id, speed=req.speed or 1.0
+        audio_b64, speed, mime = await _synthesize_long_text(
+            synth_provider, text=text, voice_id=voice_id, speed=req.speed or 1.0
         )
     except SpeechUnavailable as e:
         raise HTTPException(status_code=503, detail=str(e))
