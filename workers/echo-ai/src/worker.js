@@ -1,13 +1,17 @@
 /**
- * ECHO full stack on Cloudflare Workers.
+ * ECHO edge router (Cloudflare Worker).
  *
- * Static Expo UI via ASSETS; API under /api/*.
- * TTS durability: ./tts.js (Workers AI → SpeechT5 clone via ECHO_CLONE_TTS_URL).
- * Auth: X-Echo-Key / Bearer vs ECHO_API_KEY when set.
+ * Modules:
+ *   tts.js      — Workers AI + SpeechT5 clone fallback
+ *   stt.js      — Whisper transcription
+ *   storage.js  — D1 drafts/transcripts
+ *   parse.js    — file text extraction
+ *   auth.js     — X-Echo-Key gate
+ *   http.js     — CORS / JSON helpers
+ *
+ * Static Expo UI is served via the ASSETS binding; /api/* hits this script.
  */
 
-import { strFromU8, unzipSync } from "fflate";
-import { extractText, getDocumentProxy } from "unpdf";
 import {
   DEFAULT_TTS_MODEL,
   MAX_TTS_CHARS,
@@ -18,256 +22,19 @@ import {
   encodeBase64,
   backendLabel,
 } from "./tts.js";
-
-const DEFAULT_STT_MODEL = "@cf/openai/whisper-large-v3-turbo";
-const MAX_STT_BYTES = 24 * 1024 * 1024;
-const MAX_PARSE_BYTES = 12 * 1024 * 1024;
-
-function parseCsv(raw) {
-  return String(raw || "")
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean);
-}
-
-function corsHeaders(origin) {
-  return {
-    "Access-Control-Allow-Origin": origin || "*",
-    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type, X-Echo-Key, Authorization",
-    "Access-Control-Max-Age": "86400",
-  };
-}
-
-function json(payload, status, origin, extraHeaders = {}) {
-  return new Response(JSON.stringify(payload), {
-    status,
-    headers: {
-      ...corsHeaders(origin),
-      "Content-Type": "application/json; charset=utf-8",
-      ...extraHeaders,
-    },
-  });
-}
-
-async function timingSafeEqualString(a, b) {
-  const enc = new TextEncoder();
-  const aa = enc.encode(String(a || ""));
-  const bb = enc.encode(String(b || ""));
-  if (aa.byteLength !== bb.byteLength) {
-    return false;
-  }
-  return crypto.subtle.timingSafeEqual(aa, bb);
-}
-
-async function authorize(request, env, origin) {
-  const required = String(env.ECHO_API_KEY || "").trim();
-  const allowedOrigins = parseCsv(env.ECHO_ALLOWED_ORIGINS);
-
-  if (allowedOrigins.length && origin) {
-    const originOk = allowedOrigins.some((pattern) => {
-      if (pattern === "*") return true;
-      if (!pattern.includes("*")) return origin === pattern;
-      const re = new RegExp(
-        `^${pattern.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*")}$`,
-      );
-      return re.test(origin);
-    });
-    if (originOk && !required) return { ok: true };
-    // Origin match alone is not enough when a key is configured — key still required.
-  }
-
-  if (!required) {
-    // Open gate (local / private). Prefer setting ECHO_API_KEY on any public URL.
-    return { ok: true };
-  }
-
-  const headerKey = request.headers.get("X-Echo-Key") || "";
-  const auth = request.headers.get("Authorization") || "";
-  const bearer = auth.startsWith("Bearer ") ? auth.slice(7).trim() : "";
-  const presented = headerKey || bearer;
-
-  if (await timingSafeEqualString(presented, required)) {
-    return { ok: true };
-  }
-  return { ok: false, status: 401, error: "Invalid or missing X-Echo-Key." };
-}
-
-async function transcribe(env, audioBytes, filename) {
-  const model = (env.ECHO_STT_MODEL || DEFAULT_STT_MODEL).trim();
-  const result = await env.AI.run(model, {
-    audio: encodeBase64(audioBytes),
-    task: "transcribe",
-    vad_filter: true,
-    condition_on_previous_text: false,
-  });
-  const text = String(result?.text || "").trim();
-  if (!text) throw new Error("Transcription returned no text.");
-  return { text, model, filename };
-}
-
-async function readMultipartAudio(request) {
-  const contentType = request.headers.get("Content-Type") || "";
-  if (contentType.includes("multipart/form-data")) {
-    const form = await request.formData();
-    const file = form.get("audio") || form.get("file");
-    if (!file || typeof file === "string") {
-      throw new Error('Multipart field "audio" is required.');
-    }
-    const buf = new Uint8Array(await file.arrayBuffer());
-    return { bytes: buf, filename: file.name || "capture.webm" };
-  }
-  const buf = new Uint8Array(await request.arrayBuffer());
-  const filename =
-    request.headers.get("X-Echo-Filename") || "capture.webm";
-  return { bytes: buf, filename };
-}
-
-function pathOf(url) {
-  return url.pathname.replace(/\/+$/, "") || "/";
-}
-
-// --- D1-backed drafts/transcripts (Library tab). ---------------------------
-
-function nowIso() {
-  return new Date().toISOString();
-}
-
-async function d1CreateDraft(env, title, text) {
-  const id = crypto.randomUUID();
-  const created_at = nowIso();
-  await env.DB.prepare(
-    "INSERT INTO drafts (id, title, text, created_at) VALUES (?, ?, ?, ?)",
-  )
-    .bind(id, title, text, created_at)
-    .run();
-  return { id, title, text, created_at };
-}
-
-async function d1ListDrafts(env) {
-  const { results } = await env.DB.prepare(
-    "SELECT id, title, text, created_at FROM drafts ORDER BY created_at DESC LIMIT 200",
-  ).all();
-  return results || [];
-}
-
-async function d1DeleteDraft(env, id) {
-  const res = await env.DB.prepare("DELETE FROM drafts WHERE id = ?").bind(id).run();
-  return res.meta?.changes || 0;
-}
-
-async function d1CreateTranscript(env, text, duration) {
-  const id = crypto.randomUUID();
-  const created_at = nowIso();
-  await env.DB.prepare(
-    "INSERT INTO transcripts (id, text, duration, created_at) VALUES (?, ?, ?, ?)",
-  )
-    .bind(id, text, duration ?? null, created_at)
-    .run();
-  return { id, text, duration: duration ?? null, created_at };
-}
-
-async function d1ListTranscripts(env) {
-  const { results } = await env.DB.prepare(
-    "SELECT id, text, duration, created_at FROM transcripts ORDER BY created_at DESC LIMIT 200",
-  ).all();
-  return results || [];
-}
-
-async function d1DeleteTranscript(env, id) {
-  const res = await env.DB.prepare("DELETE FROM transcripts WHERE id = ?").bind(id).run();
-  return res.meta?.changes || 0;
-}
-
-function storageUnavailable(origin) {
-  return json(
-    {
-      detail:
-        "Storage unavailable: D1 database not bound on this Worker. Run the echo-ai D1 " +
-        "migration (migrations/0001_init.sql) and add the [[d1_databases]] binding, then redeploy.",
-    },
-    503,
-    origin,
-  );
-}
-
-// --- File parsing (.txt/.md/.docx/.pdf). ------------------------------------
-
-class ParseError extends Error {
-  constructor(status, detail) {
-    super(detail);
-    this.status = status;
-    this.detail = detail;
-  }
-}
-
-const XML_ENTITIES = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'" };
-
-function decodeXmlEntities(s) {
-  return s.replace(/&(amp|lt|gt|quot|apos|#\d+|#x[0-9a-fA-F]+);/g, (whole, ent) => {
-    if (ent[0] === "#") {
-      const isHex = ent[1] === "x" || ent[1] === "X";
-      const code = isHex ? parseInt(ent.slice(2), 16) : parseInt(ent.slice(1), 10);
-      return Number.isFinite(code) ? String.fromCodePoint(code) : whole;
-    }
-    return XML_ENTITIES[ent] ?? whole;
-  });
-}
-
-/** Minimal OOXML text extraction: word/document.xml, paragraph-joined, mirrors python-docx's
- *  paragraph-per-line behaviour used by the Python API's _extract_docx. */
-function extractDocxText(bytes) {
-  let zip;
-  try {
-    zip = unzipSync(bytes);
-  } catch {
-    throw new ParseError(415, "Could not read .docx: not a valid zip archive.");
-  }
-  const entry = zip["word/document.xml"];
-  if (!entry) {
-    throw new ParseError(415, "Could not find word/document.xml inside the .docx file.");
-  }
-  const xml = strFromU8(entry);
-  const paragraphs = xml.match(/<w:p[ >][\s\S]*?<\/w:p>/g) || [];
-  const lines = paragraphs.map((p) => {
-    const runs = p.match(/<w:t[^>]*>[\s\S]*?<\/w:t>/g) || [];
-    return runs
-      .map((r) => decodeXmlEntities(r.replace(/^<w:t[^>]*>/, "").replace(/<\/w:t>$/, "")))
-      .join("");
-  });
-  return lines.filter((l) => l.length).join("\n");
-}
-
-/** unpdf wraps a serverless build of pdf.js with no `canvas` dependency and the worker
- *  inlined, which is what makes it loadable under workerd (plain pdfjs-dist and
- *  Node-native libs like pdf-parse are not). */
-async function extractPdfText(bytes) {
-  let doc;
-  try {
-    doc = await getDocumentProxy(bytes);
-  } catch (e) {
-    throw new ParseError(415, `Could not read .pdf: ${String(e?.message || e).slice(0, 160)}`);
-  }
-  const { text } = await extractText(doc, { mergePages: true });
-  if (!text || !text.trim()) {
-    throw new ParseError(415, "No extractable text found in this .pdf (it may be scanned/image-only).");
-  }
-  return text;
-}
-
-async function parseUploadedFile(bytes, filename) {
-  const name = (filename || "").toLowerCase();
-  if (name.endsWith(".txt") || name.endsWith(".md")) {
-    return new TextDecoder("utf-8", { fatal: false }).decode(bytes);
-  }
-  if (name.endsWith(".docx")) {
-    return extractDocxText(bytes);
-  }
-  if (name.endsWith(".pdf")) {
-    return extractPdfText(bytes);
-  }
-  throw new ParseError(415, "Unsupported file type. Use .txt, .md, .docx, or .pdf.");
-}
+import { corsHeaders, json, pathOf } from "./http.js";
+import { authorize } from "./auth.js";
+import { transcribe, readMultipartAudio, MAX_STT_BYTES } from "./stt.js";
+import {
+  d1CreateDraft,
+  d1ListDrafts,
+  d1DeleteDraft,
+  d1CreateTranscript,
+  d1ListTranscripts,
+  d1DeleteTranscript,
+  storageUnavailable,
+} from "./storage.js";
+import { parseUploadedFile, ParseError, MAX_PARSE_BYTES } from "./parse.js";
 
 const SAMPLE_TEXT =
   "ECHO is a browser-native reading surface for listening to drafts out loud. " +

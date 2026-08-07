@@ -1,23 +1,30 @@
 # ECHO
 
-Canonical product tree for the ECHO voice reader.
+Browser-native voice reader: paste or import text, listen with word tracking, dictate, store drafts.
 
-## Surfaces
+**Canonical tree:** `/home/martin/work/web-apps/ECHOapp`  
+**Public hardline:** https://martin.govern-ai.ca/echo/  
+**Edge + Expo:** https://echo-ai.martinlepage26.workers.dev/
 
-| Path | What |
+See [ARCHITECTURE.md](./ARCHITECTURE.md) for the modular layout.
+
+## Layout
+
+| Path | Role |
 |------|------|
-| `web/` | Hardline browser UI → **https://martin.govern-ai.ca/echo/** |
-| `workers/echo-ai/` | Cloudflare Workers AI speech + Expo static assets |
-| `frontend/` | Expo app (Readback / Dictation / Library) |
-| `backend/` | Python API for local/dev providers |
+| `web/` | Hardline browser UI (modular `web/src/*`) |
+| `workers/echo-ai/` | Edge speech API + Expo static assets |
+| `frontend/` | Expo Readback / Dictation / Library |
+| `backend/` | Local SpeechT5 clone + optional providers |
+| `scripts/` | Deploy, clone tunnel, site sync |
 
 ## Deploy
 
 ```bash
-# 0) Optional but recommended: local SpeechT5 clone (survives free Workers AI neuron caps)
+# 0) Local clone (survives free Workers AI neuron caps)
 bash scripts/start-echo-clone.sh
 
-# 1) Speech stack (workers.dev) — also picks up backend/.clone-tunnel-url as ECHO_CLONE_TTS_URL
+# 1) Edge speech + Expo static
 bash scripts/deploy-cf.sh
 
 # 2) Hardline /echo on martin.govern-ai.ca
@@ -25,6 +32,19 @@ bash scripts/sync-echo-to-site.sh
 cd ../martinlepage26-bit.github.io && npm run deploy:site
 ```
 
-**Speech durability:** Workers AI is preferred when neurons remain. When free allocation is exhausted (error 4006), the Worker and site proxy fall back to the clone origin. Keep `start-echo-clone.sh` running on this host for production readback.
+## Dev
 
-See `docs/inventory/echo-surfaces-2026-08-06.md` and `docs/handoff/echo-durable-speech-repair-2026-08-07.md`.
+```bash
+# Hardline bundle only
+cd web && npm run build
+
+# Edge local
+cd workers/echo-ai && npx wrangler dev
+
+# Python API / clone
+cd backend && .venv/bin/uvicorn server:app --host 127.0.0.1 --port 8099
+```
+
+## Product
+
+See [PRODUCT.md](./PRODUCT.md).
