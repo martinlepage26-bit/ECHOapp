@@ -13,15 +13,16 @@
 #   journalctl --user -u echo-clone-tunnel.service -f
 
 [Unit]
-Description=Cloudflare tunnel for echo-clone-api.pharos-ai.ca
-After=network-online.target echo-clone.service
-Requires=echo-clone.service
+Description=Cloudflare named tunnel for ECHO clone backend (echo-clone-api)
+After=network-online.target echo-clone-backend.service
+Wants=network-online.target
+Requires=echo-clone-backend.service
 
 [Service]
 Type=simple
-ExecStart=%h/.local/bin/cloudflared tunnel --config %h/.cloudflared/echo-clone-config.yml run echo-clone-api
+ExecStart=/usr/local/bin/cloudflared tunnel --config %h/.cloudflared/echo-clone-config.yml run echo-clone-api
 Restart=on-failure
-RestartSec=5
+RestartSec=3
 
 [Install]
 WantedBy=default.target

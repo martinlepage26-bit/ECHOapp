@@ -109,6 +109,31 @@ class CloneTTSEngine:
                 self._embeddings[vid] = self._embed_file(path)
                 logger.info("embedded voice=%s from %s", vid, path.name)
 
+    def warmup(self) -> None:
+        """Load models and run one dummy synthesis so the first real request is fast.
+
+        Without this, the very first inference after model load can still take
+        ~25 s due to lazy torch / transformer initialization. We pay that cost
+        once at startup.
+        """
+        logger.info("warming up English pipeline...")
+        self._ensure_loaded()
+        if "echo" in self._embeddings:
+            self.synthesize("warm up", "echo", 1.0)
+            logger.info("English pipeline warm")
+
+        ckpt_dir = _openvoice_checkpoint_dir()
+        converter_ckpt = ckpt_dir / "converter" / "checkpoint.pth"
+        fr_se = ckpt_dir / "base_speakers" / "ses" / "fr.pth"
+        if converter_ckpt.is_file() and fr_se.is_file():
+            logger.info("warming up French pipeline...")
+            self._ensure_openvoice_loaded()
+            if "patricia" in VOICE_CATALOG and self.has_voice("patricia"):
+                self.synthesize("échauffement", "patricia", 1.0)
+                logger.info("French pipeline warm")
+        else:
+            logger.info("OpenVoice checkpoints not cached; French will warm on first request")
+
     def _embed_file(self, path: Path):
         import librosa
 

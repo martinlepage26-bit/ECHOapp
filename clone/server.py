@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import hmac
 import logging
 import os
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Header, HTTPException
 from fastapi.exceptions import RequestValidationError
@@ -15,7 +17,27 @@ from engine import get_clone_engine, synthesize as synthesize_wav
 
 logger = logging.getLogger("echo.clone.server")
 
-app = FastAPI(title="ECHO Clone TTS Sidecar", version="1.0.0")
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    """Pre-load and warm up the clone TTS engine so every request is fast.
+
+    Without warmup the first call after a restart could take ~55 s because
+    SpeechT5, the speaker encoder, the OpenVoice/MeloTTS stack and voice
+    embeddings all loaded lazily. We pay that cost once at startup instead.
+    """
+    logger.info("pre-loading clone TTS engine...")
+    engine = get_clone_engine()
+    await asyncio.to_thread(engine.warmup)
+    logger.info("clone TTS engine ready")
+    yield
+
+
+app = FastAPI(
+    title="ECHO Clone TTS Sidecar",
+    version="1.0.0",
+    lifespan=lifespan,
+)
 
 
 class TTSRequest(BaseModel):
