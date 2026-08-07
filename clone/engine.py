@@ -145,7 +145,7 @@ class CloneTTSEngine:
         ):
             logger.info("warming up French pipeline...")
             self._ensure_openvoice_loaded()
-            if "patricia" in VOICE_CATALOG and self.has_voice("patricia"):
+            if self.has_voice("patricia"):
                 self.synthesize("échauffement", "patricia", 1.0)
                 logger.info("French pipeline warm")
         else:
