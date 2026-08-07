@@ -1,0 +1,52 @@
+# Clone sidecar runtime dependencies.
+#
+# torch is CPU-only on this host; installing plain `torch==2.13.0` from PyPI
+# pulls the default (much larger, CUDA-bundled) build. Install with:
+#   pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu
+#
+# MeloTTS and OpenVoice must then be installed separately without their upstream
+# pinned dependency versions (some predate Python 3.13 and force source builds):
+#   pip install --no-deps git+https://github.com/myshell-ai/MeloTTS.git git+https://github.com/myshell-ai/OpenVoice.git
+
+# API server
+fastapi==0.110.1
+uvicorn==0.25.0
+python-dotenv==1.2.2
+
+# OpenVoice checkpoint downloads
+httpx==0.28.1
+
+# SpeechT5 + speaker encoder stack
+torch==2.13.0
+transformers==5.14.1
+speechbrain==1.1.0
+
+# MeloTTS / OpenVoice runtime dependencies
+librosa==0.9.1
+txtsplit
+cached_path
+num2words==0.5.12
+unidic_lite==1.0.8
+unidic==1.1.0
+mecab-python3
+pykakasi==2.2.1
+fugashi
+g2p_en==2.1.0
+anyascii==0.3.2
+jamo==0.4.1
+gruut[fr]==2.2.3
+g2pkk
+pydub==0.25.1
+eng_to_ipa==0.0.2
+unidecode==1.3.7
+pypinyin==0.50.0
+cn2an==0.5.22
+jieba==0.42.1
+langid==1.1.6
+loguru==0.7.2
+soxr
+faster_whisper
+wavmark
+whisper_timestamped
+# librosa 0.9.1 imports pkg_resources, removed from setuptools>=81.
+setuptools<81

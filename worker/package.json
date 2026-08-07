@@ -1,0 +1,26 @@
+{
+  "name": "echo-worker",
+  "private": true,
+  "version": "2.0.0",
+  "description": "ECHO edge runtime — one Worker for UI assets, TTS, file parsing, and drafts.",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "tail": "wrangler tail",
+    "types": "wrangler types",
+    "test": "vitest"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.8.0",
+    "@cloudflare/workers-types": "^5.20260804.1",
+    "@types/node": "^26.2.0",
+    "typescript": "^5.8.0",
+    "vitest": "^3.0.0",
+    "wrangler": "^4.20.0"
+  },
+  "dependencies": {
+    "fflate": "^0.8.3",
+    "unpdf": "^1.8.0"
+  }
+}

@@ -1,49 +1,53 @@
 # ECHO
 
-Browser-native voice reader: paste or import text, listen with word tracking, dictate, store drafts.
+Browser-native voice reader: paste or import text, listen with live word tracking, save drafts.
 
-**Canonical tree:** `/home/martin/work/web-apps/ECHOapp`  
-**Public hardline:** https://martin.govern-ai.ca/echo/  
-**Edge + Expo:** https://echo-ai.martinlepage26.workers.dev/
-
-See [ARCHITECTURE.md](./ARCHITECTURE.md) for the modular layout.
+**Canonical tree:** `/home/martin/work/web-apps/ECHOapp`
 
 ## Layout
 
 | Path | Role |
 |------|------|
-| `web/` | Hardline browser UI (modular `web/src/*`) |
-| `workers/echo-ai/` | Edge speech API + Expo static assets |
-| `frontend/` | Expo Readback / Dictation / Library |
-| `backend/` | Local SpeechT5 clone + optional providers |
-| `scripts/` | Deploy, clone tunnel, site sync |
+| `ui/` | Single web UI (Vite + React) |
+| `worker/` | One Cloudflare Worker: static assets, TTS, parse, drafts |
+| `clone/` | Local SpeechT5 / OpenVoice sidecar for custom voices |
+| `docs/architecture/redesign.md` | Full redesign rationale |
+
+## Quick start
+
+```bash
+# Install dependencies
+npm install
+
+# Run the clone sidecar (required for echo/patricia/martin-* voices)
+cd clone
+# see clone/systemd/ for persistent service units
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+python3 server.py
+
+# In another terminal, run the Worker + UI
+npm run dev
+```
 
 ## Deploy
 
 ```bash
-# 0) Local clone (survives free Workers AI neuron caps)
-bash scripts/start-echo-clone.sh
-
-# 1) Edge speech + Expo static
-bash scripts/deploy-cf.sh
-
-# 2) Hardline /echo on martin.govern-ai.ca
-bash scripts/sync-echo-to-site.sh
-cd ../martinlepage26-bit.github.io && npm run deploy:site
+npm run build   # builds ui/dist
+npm run deploy  # deploys the Worker with ui/dist assets
 ```
 
-## Dev
+The clone sidecar is deployed and restarted separately on its host.
 
-```bash
-# Hardline bundle only
-cd web && npm run build
+## Configuration
 
-# Edge local
-cd workers/echo-ai && npx wrangler dev
+| Variable | Where | Purpose |
+|----------|-------|---------|
+| `ECHO_API_KEY` | Wrangler secret + `.dev.vars` + clone sidecar | Single auth gate |
+| `ECHO_CLONE_TTS_URL` | Wrangler secret + `.dev.vars` | Clone sidecar origin |
+| `ECHO_TTS_MODEL` | `wrangler.toml` `[vars]` | Workers AI TTS model |
 
-# Python API / clone
-cd backend && .venv/bin/uvicorn server:app --host 127.0.0.1 --port 8099
-```
+See `.env.example` (root) and `clone/.env.example`.
 
 ## Product
 

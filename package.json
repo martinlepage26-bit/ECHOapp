@@ -1,0 +1,21 @@
+{
+  "name": "echo",
+  "private": true,
+  "version": "2.0.0",
+  "description": "ECHO — radically simple readback: one UI, one Worker, one sidecar.",
+  "type": "module",
+  "scripts": {
+    "build": "npm run build --workspace=ui",
+    "deploy": "npm run build && wrangler deploy",
+    "dev": "wrangler dev",
+    "test": "npm run test --workspace=worker",
+    "types": "wrangler types"
+  },
+  "workspaces": [
+    "ui",
+    "worker"
+  ],
+  "devDependencies": {
+    "wrangler": "^4.20.0"
+  }
+}

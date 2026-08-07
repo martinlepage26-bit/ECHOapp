@@ -1,0 +1,27 @@
+# Cloudflare tunnel for echo-clone-api.pharos-ai.ca — systemd --user unit.
+#
+# Install / enable with:
+#   systemctl --user enable --now /home/martin/work/web-apps/ECHOapp/clone/systemd/echo-clone-tunnel.service
+# Or copy this file to ~/.config/systemd/user/ first.
+#
+# This unit assumes a named Cloudflare tunnel (e.g. "echo-clone-api") and a
+# config file at ~/.cloudflared/echo-clone-config.yml routing
+# echo-clone-api.pharos-ai.ca to http://127.0.0.1:8099.
+#
+# Status / logs:
+#   systemctl --user status echo-clone-tunnel.service
+#   journalctl --user -u echo-clone-tunnel.service -f
+
+[Unit]
+Description=Cloudflare tunnel for echo-clone-api.pharos-ai.ca
+After=network-online.target echo-clone.service
+Requires=echo-clone.service
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/cloudflared tunnel --config %h/.cloudflared/echo-clone-config.yml run echo-clone-api
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
