@@ -13,6 +13,7 @@ Tags: `current` (accurate today) Â· `reference` (historical, not contradicted) Â
 | echoapp-readback-alignment-2026-07-13.md | reference | Describes frontend/tests/readback-web.spec.ts, which is the current frontend test asset (confirmed present). |
 | echo-workers-ai-2026-08-01.md | reference | Workers AI wiring; first recorded free-neuron 4006. Superseded for production durability by echo-durable-speech-repair-2026-08-07.md. |
 | echo-merge-webapp-2026-08-06.md | reference | Canonical tree under web-apps/ECHOapp; hardline on martin.govern-ai.ca/echo. |
-| echo-durable-speech-repair-2026-08-07.md | current | Permanent repair: Worker + Pages clone fallback when Workers AI neurons are out; no bare-502 error strip. |
+| echo-durable-speech-repair-2026-08-07.md | reference | Permanent repair: Worker + Pages clone fallback when Workers AI neurons are out; no bare-502 error strip. Tunnel-fragility residual risk it flagged is closed by the next row. |
+| echo-clone-tunnel-hardening-2026-08-07.md | current | Named Cloudflare Tunnel + systemd `--user` units + linger for the clone origin, replacing the ephemeral `trycloudflare.com` quick tunnel; permanent `ECHO_CLONE_TTS_URL`. |
 
 No file is moved or deleted; this index is advisory only.

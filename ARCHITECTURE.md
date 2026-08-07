@@ -28,7 +28,9 @@ Refactored 2026-08-07. One product, four layers, one speech authority.
                             │ optional ECHO_CLONE_TTS_URL
 ┌───────────────────────────▼─────────────────────────────────┐
 │  Local clone sidecar      backend/ (SpeechT5 / OpenVoice)   │
-│  Started by scripts/start-echo-clone.sh                     │
+│  systemd --user: echo-clone-backend.service                │
+│  Fronted by named tunnel: echo-clone-api.pharos-ai.ca       │
+│  systemd --user: echo-clone-tunnel.service (linger enabled) │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -61,14 +63,24 @@ Refactored 2026-08-07. One product, four layers, one speech authority.
 
 - Replacing Expo with hardline (both stay).
 - Enabling Workers Paid (operator billing decision).
-- Named Cloudflare Tunnel (still trycloudflare via start script).
 - Deleting Python backend (clone + local providers remain).
+
+## Clone origin durability (2026-08-07)
+
+The clone sidecar and its tunnel are permanent, not ad hoc:
+
+- `echo-clone-backend.service` (systemd --user) runs uvicorn on `127.0.0.1:8099`, `Restart=on-failure`.
+- `echo-clone-tunnel.service` (systemd --user) runs a **named** Cloudflare Tunnel (`echo-clone-api`, not a `trycloudflare.com` quick tunnel) routed to `echo-clone-api.pharos-ai.ca`, `Restart=on-failure`.
+- `loginctl enable-linger martin` is set, so both units start on boot without an interactive login.
+- `ECHO_CLONE_TTS_URL` on both the Worker and the Pages proxy is set once to the permanent hostname — no longer needs rewriting on every restart.
+- `scripts/start-echo-clone.sh` is now a manual fallback only (see its header); normal operation and reboot survival are handled by the two systemd units.
 
 ## Deploy
 
 ```bash
-bash scripts/start-echo-clone.sh   # optional durability
 bash scripts/deploy-cf.sh          # edge + Expo static
 bash scripts/sync-echo-to-site.sh
 cd ../martinlepage26-bit.github.io && npm run deploy:site
+# Clone origin runs persistently via systemd — see "Clone origin durability" above.
+# Manual restart if ever needed: systemctl --user restart echo-clone-backend.service echo-clone-tunnel.service
 ```

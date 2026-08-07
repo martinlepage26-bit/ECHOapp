@@ -1,4 +1,21 @@
 #!/usr/bin/env bash
+# SUPERSEDED for normal operation (2026-08-07): the clone backend and its tunnel
+# now run persistently as systemd --user units (echo-clone-backend.service,
+# echo-clone-tunnel.service) behind the permanent hostname
+# https://echo-clone-api.pharos-ai.ca, with `loginctl enable-linger martin` set
+# so they survive reboot. ECHO_CLONE_TTS_URL on the Worker and Pages proxy is
+# set once to that permanent hostname and no longer needs rewriting per run.
+# See ARCHITECTURE.md "Clone origin durability". Manual restart:
+#   systemctl --user restart echo-clone-backend.service echo-clone-tunnel.service
+#
+# This script remains only as a manual fallback if you need an ad hoc, throwaway
+# quick tunnel (e.g. debugging off the permanent path) — it rewrites the
+# ECHO_CLONE_TTS_URL secrets to whatever ephemeral trycloudflare.com URL it gets,
+# which will DIVERGE from the permanent setup above. Re-run the two `wrangler
+# secret put ECHO_CLONE_TTS_URL` commands with the permanent hostname afterward
+# to restore normal operation.
+#
+# Original purpose (still accurate for the ad hoc path):
 # Start SpeechT5 clone API (from backend/voices/*.mp3) + Cloudflare quick tunnel,
 # and point martin-lepage-site Pages secret ECHO_CLONE_TTS_URL at it.
 #
