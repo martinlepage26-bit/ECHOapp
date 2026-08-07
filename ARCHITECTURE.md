@@ -37,7 +37,9 @@ Refactored 2026-08-07. One product, four layers, one speech authority.
 | Module | Role |
 |--------|------|
 | `echo-reader.js` | Entry re-export |
-| `app.js` | DOM wiring, playback + dictation loop |
+| `app.js` | DOM wiring shell (profiles, file import, event binding) |
+| `playback.js` | Readback controller (system voices + online TTS) |
+| `dictation.js` | Dictation controller (mic / import → STT → transcript) |
 | `config.js` | Endpoints, limits, profile ids |
 | `profiles.js` | PROFILE_CATALOG |
 | `text.js` | Normalize / chunk / meta |
