@@ -123,6 +123,7 @@ class CloneTTSEngine:
             logger.info("English pipeline warm")
 
         ckpt_dir = _openvoice_checkpoint_dir()
+        converter_config = ckpt_dir / "converter" / "config.json"
         converter_ckpt = ckpt_dir / "converter" / "checkpoint.pth"
         fr_se = ckpt_dir / "base_speakers" / "ses" / "fr.pth"
         patricia_se = self._target_se_cache_path("patricia")
@@ -135,8 +136,9 @@ class CloneTTSEngine:
         except Exception:
             unidic_ready = False
 
+        converter_ready = converter_config.is_file() and converter_ckpt.is_file()
         if (
-            converter_ckpt.is_file()
+            converter_ready
             and fr_se.is_file()
             and unidic_ready
             and patricia_se.is_file()
@@ -148,10 +150,11 @@ class CloneTTSEngine:
                 logger.info("French pipeline warm")
         else:
             logger.info(
-                "French pipeline resources not fully cached (checkpoints=%s unidic=%s target_se=%s); "
+                "French pipeline resources not fully cached (converter=%s unidic=%s fr_se=%s target_se=%s); "
                 "French will warm on first request",
-                converter_ckpt.is_file() and fr_se.is_file(),
+                converter_ready,
                 unidic_ready,
+                fr_se.is_file(),
                 patricia_se.is_file(),
             )
 
