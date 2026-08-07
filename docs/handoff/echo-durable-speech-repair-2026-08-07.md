@@ -100,3 +100,16 @@ cd /home/martin/work/martinlepage26-bit.github.io && npm run deploy:site
 - [x] Site proxy returns audio for sample + Aura ids
 - [x] Errors no longer depend on bare CF 502 text
 - [x] Handoff written; residual tunnel fragility explicit
+
+## Code-review follow-up (2026-08-07, same day)
+
+Structural cleanup after strict review (no behavior change):
+
+| Before | After |
+|--------|-------|
+| `worker.js` ~986 lines with TTS + HTTP + D1 mixed | `worker.js` ~581 + `tts.js` ~383 (TTS owns durability) |
+| Pages Function re-implemented full Aura→sample map + triple rescue | Thin proxy: sample→clone, else Worker, one echo rescue if Worker down |
+| Silent `.catch(() => null)` on clone failure | Dual AI+clone errors composed into one message |
+| `tryClone` returned `Response \| null \| {failed}` | `Response \| null` only |
+
+Deployed: Worker `ad3f5441-…`, Pages `37354bdf…`.

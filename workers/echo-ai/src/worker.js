@@ -1,131 +1,33 @@
 /**
  * ECHO full stack on Cloudflare Workers.
  *
- * Static Expo UI is served via the ASSETS binding (frontend/dist).
- * API routes (run_worker_first = /api/*):
- *   GET    /api/              — health
- *   GET    /api/voices        — voice catalog
- *   GET    /api/sample-text   — sample draft
- *   POST   /api/tts/generate  — JSON {text, voice_id, speed} → TTSResponse
- *   POST   /api/stt/transcribe — multipart field "audio" → STTResponse (auto-saved to D1)
- *   GET/POST/DELETE /api/drafts[/:id]       — D1-backed, requires env.DB
- *   GET/POST/DELETE /api/transcripts[/:id]  — D1-backed, requires env.DB
- *   POST   /api/parse-file    — multipart field "file"; .txt/.md/.docx/.pdf
- *
- * Legacy: POST /api/echo-tts, /api/echo-transcribe
- *
- * Auth: X-Echo-Key (or Authorization: Bearer) must match ECHO_API_KEY when set.
+ * Static Expo UI via ASSETS; API under /api/*.
+ * TTS durability: ./tts.js (Workers AI → SpeechT5 clone via ECHO_CLONE_TTS_URL).
+ * Auth: X-Echo-Key / Bearer vs ECHO_API_KEY when set.
  */
 
 import { strFromU8, unzipSync } from "fflate";
 import { extractText, getDocumentProxy } from "unpdf";
+import {
+  DEFAULT_TTS_MODEL,
+  MAX_TTS_CHARS,
+  voiceCatalog,
+  defaultVoiceId,
+  synthesizeLong,
+  estimateWordTimings,
+  encodeBase64,
+  backendLabel,
+} from "./tts.js";
 
-const DEFAULT_TTS_MODEL = "@cf/deepgram/aura-2-en";
 const DEFAULT_STT_MODEL = "@cf/openai/whisper-large-v3-turbo";
-const DEFAULT_VOICE = "athena";
-// Overall accepted draft length: 10,000 words measures ~60,000 chars in practice
-// (verified against real sample text) — set with headroom so a genuine 10k-word draft
-// doesn't get rejected. Individual Workers AI calls still respect PROVIDER_CHUNK_CHARS;
-// long drafts are split, synthesized per-chunk, and the audio concatenated back together.
-const MAX_TTS_CHARS = 70_000;
-// Deepgram Aura-2 on Workers AI hard-rejects over 2000 chars per call (error 8007) —
-// tighter than OpenAI's 4096. Verified directly against live Workers AI (2026-08-03).
-const PROVIDER_CHUNK_CHARS = 1900;
-const CHUNK_CONCURRENCY = 4; // Workers AI calls are network I/O, not local CPU — safe to parallelize
 const MAX_STT_BYTES = 24 * 1024 * 1024;
 const MAX_PARSE_BYTES = 12 * 1024 * 1024;
-
-/** Aura-2 English speakers with short UI tags (name · style). */
-const AURA_VOICES = [
-  { id: "athena", name: "Athena", tag: "clear · narration" },
-  { id: "luna", name: "Luna", tag: "warm · soft" },
-  { id: "orion", name: "Orion", tag: "deep · steady" },
-  { id: "asteria", name: "Asteria", tag: "bright · expressive" },
-  { id: "hera", name: "Hera", tag: "authoritative · news" },
-  { id: "apollo", name: "Apollo", tag: "warm · male" },
-  { id: "iris", name: "Iris", tag: "light · friendly" },
-  { id: "andromeda", name: "Andromeda", tag: "smooth · storytelling" },
-  { id: "arcas", name: "Arcas", tag: "calm · measured" },
-  { id: "aries", name: "Aries", tag: "energetic · direct" },
-  { id: "aurora", name: "Aurora", tag: "soft · contemplative" },
-  { id: "cordelia", name: "Cordelia", tag: "refined · literary" },
-  { id: "draco", name: "Draco", tag: "low · dramatic" },
-  { id: "electra", name: "Electra", tag: "crisp · modern" },
-  { id: "helena", name: "Helena", tag: "gentle · conversational" },
-  { id: "hermes", name: "Hermes", tag: "quick · informative" },
-  { id: "jupiter", name: "Jupiter", tag: "rich · broadcast" },
-  { id: "mars", name: "Mars", tag: "firm · instructional" },
-  { id: "odysseus", name: "Odysseus", tag: "story · epic" },
-  { id: "orpheus", name: "Orpheus", tag: "musical · lyrical" },
-  { id: "phoebe", name: "Phoebe", tag: "bright · youthful" },
-  { id: "saturn", name: "Saturn", tag: "mature · grounded" },
-  { id: "thalia", name: "Thalia", tag: "playful · light" },
-  { id: "zeus", name: "Zeus", tag: "commanding · deep" },
-];
-
-/**
- * Hardline /echo sample profiles — first-class live readaloud IDs.
- * Each maps to a stable Aura speaker so any draft can be synthesized on the edge
- * without the optional SpeechT5 clone origin. UI keeps the sample name (echo, …).
- */
-const SAMPLE_VOICES = [
-  { id: "echo", name: "Echo", tag: "sample · live", aura: "athena" },
-  { id: "patricia", name: "Patricia", tag: "charming · clear · young", aura: "luna" },
-  { id: "martin-en", name: "Martin EN", tag: "english · live", aura: "orion" },
-  { id: "martin-fr", name: "Martin FR", tag: "français · live", aura: "apollo" },
-];
-
-const SAMPLE_VOICE_ALIASES = Object.fromEntries(
-  SAMPLE_VOICES.map((v) => [v.id, v.aura]),
-);
 
 function parseCsv(raw) {
   return String(raw || "")
     .split(",")
     .map((s) => s.trim())
     .filter(Boolean);
-}
-
-function voiceCatalog(env) {
-  const configured = parseCsv(env.ECHO_TTS_VOICES);
-  const aura = configured.length
-    ? configured.map((id) => {
-        const known = AURA_VOICES.find((v) => v.id === id);
-        return known || { id, name: id, tag: "workers ai · aura" };
-      })
-    : AURA_VOICES;
-  // Sample profiles first so clients and the hardline UI see them as real voices.
-  const sampleIds = new Set(SAMPLE_VOICES.map((v) => v.id));
-  return [
-    ...SAMPLE_VOICES.map(({ id, name, tag }) => ({ id, name, tag })),
-    ...aura.filter((v) => !sampleIds.has(v.id)),
-  ];
-}
-
-function defaultVoiceId(env, catalog) {
-  const preferred = (env.ECHO_DEFAULT_VOICE || DEFAULT_VOICE).trim();
-  if (catalog.some((v) => v.id === preferred)) return preferred;
-  // Prefer the Echo sample profile when present.
-  if (catalog.some((v) => v.id === "echo")) return "echo";
-  return catalog[0]?.id || DEFAULT_VOICE;
-}
-
-/** Resolve a UI/sample voice id to the Aura speaker actually sent to Workers AI. */
-function resolveAuraVoiceId(voiceId, catalog, env) {
-  const raw = String(voiceId || "").trim().toLowerCase();
-  if (SAMPLE_VOICE_ALIASES[raw]) return SAMPLE_VOICE_ALIASES[raw];
-  if (catalog.some((v) => v.id === raw) && !SAMPLE_VOICE_ALIASES[raw]) {
-    // Already an Aura id present in the catalog.
-    if (AURA_VOICES.some((v) => v.id === raw)) return raw;
-  }
-  const fallback = defaultVoiceId(env, catalog);
-  return SAMPLE_VOICE_ALIASES[fallback] || fallback;
-}
-
-function clampSpeed(speed) {
-  const n = Number(speed);
-  if (!Number.isFinite(n) || n <= 0) return 1;
-  return Math.max(0.5, Math.min(2, n));
 }
 
 function corsHeaders(origin) {
@@ -146,23 +48,6 @@ function json(payload, status, origin, extraHeaders = {}) {
       ...extraHeaders,
     },
   });
-}
-
-function encodeBase64(buffer) {
-  const bytes = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
-  let binary = "";
-  const chunk = 0x8000;
-  for (let i = 0; i < bytes.length; i += chunk) {
-    binary += String.fromCharCode(...bytes.subarray(i, Math.min(i + chunk, bytes.length)));
-  }
-  return btoa(binary);
-}
-
-function decodeBase64(base64) {
-  const binary = atob(base64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-  return bytes;
 }
 
 async function timingSafeEqualString(a, b) {
@@ -206,293 +91,6 @@ async function authorize(request, env, origin) {
     return { ok: true };
   }
   return { ok: false, status: 401, error: "Invalid or missing X-Echo-Key." };
-}
-
-function estimateWordTimings(text) {
-  const tokens = String(text || "").match(/\S+/g) || [];
-  let cursor = 0;
-  const words = tokens.map((word, index) => {
-    const core = word.replace(/^[^\w]+|[^\w]+$/g, "");
-    let duration = 0.12 + Math.min(core.length || 1, 16) * 0.028;
-    if (/\d/.test(core)) duration += 0.08;
-    if (/\.\.\.$|…$/.test(word)) duration += 0.28;
-    else if (/[.!?]$/.test(word)) duration += 0.18;
-    else if (/[,;:]$/.test(word)) duration += 0.09;
-    const start = Number(cursor.toFixed(3));
-    cursor += duration;
-    return {
-      word,
-      start,
-      end: Number(cursor.toFixed(3)),
-      index,
-    };
-  });
-  return { words, estimated_duration: Number(cursor.toFixed(3)) };
-}
-
-async function audioResultToBytes(result) {
-  if (result instanceof ReadableStream) {
-    const res = new Response(result);
-    return { bytes: new Uint8Array(await res.arrayBuffer()), mime: "audio/mpeg" };
-  }
-  if (result instanceof ArrayBuffer) {
-    return { bytes: new Uint8Array(result), mime: "audio/mpeg" };
-  }
-  if (ArrayBuffer.isView(result)) {
-    return {
-      bytes: new Uint8Array(result.buffer, result.byteOffset, result.byteLength),
-      mime: "audio/mpeg",
-    };
-  }
-  if (result && typeof result.audio === "string") {
-    return { bytes: decodeBase64(result.audio), mime: "audio/wav" };
-  }
-  if (result && result.audio instanceof ArrayBuffer) {
-    return { bytes: new Uint8Array(result.audio), mime: "audio/mpeg" };
-  }
-  if (result && ArrayBuffer.isView(result.audio)) {
-    const view = result.audio;
-    return {
-      bytes: new Uint8Array(view.buffer, view.byteOffset, view.byteLength),
-      mime: "audio/mpeg",
-    };
-  }
-  throw new Error("Unknown audio payload shape from Workers AI.");
-}
-
-function buildTtsInput(model, text, voice, speed) {
-  if (model.includes("melotts")) {
-    return { prompt: text, speaker: voice, speed };
-  }
-  // Deepgram Aura: text + speaker + encoding
-  return {
-    text,
-    speaker: voice,
-    encoding: "mp3",
-  };
-}
-
-/** Split normalized text into <=maxChars pieces for a single Workers AI call.
- *  Splits on paragraph boundaries first (merging short ones back together so the call
- *  count stays low), then sentence boundaries, then plain whitespace as a last resort.
- *  Mirrors backend/speech_text.py's chunk_text_for_synthesis (Python API parity). */
-function chunkText(text, maxChars) {
-  if (text.length <= maxChars) return [text];
-  const chunks = [];
-  let buf = "";
-  for (const para of text.split("\n\n")) {
-    const candidate = buf ? `${buf}\n\n${para}` : para;
-    if (candidate.length <= maxChars) {
-      buf = candidate;
-      continue;
-    }
-    if (buf) {
-      chunks.push(buf);
-      buf = "";
-    }
-    if (para.length <= maxChars) {
-      buf = para;
-      continue;
-    }
-    let start = 0;
-    while (start < para.length) {
-      let end = Math.min(para.length, start + maxChars);
-      if (end < para.length) {
-        const window = para.slice(start, end);
-        const cut = Math.max(
-          window.lastIndexOf(". "), window.lastIndexOf("! "),
-          window.lastIndexOf("? "), window.lastIndexOf(" "),
-        );
-        if (cut > maxChars * 0.4) end = start + cut + 1;
-      }
-      const piece = para.slice(start, end).trim();
-      if (piece) chunks.push(piece);
-      start = end;
-    }
-  }
-  if (buf) chunks.push(buf);
-  return chunks;
-}
-
-async function mapWithConcurrency(items, limit, fn) {
-  const results = new Array(items.length);
-  let next = 0;
-  async function worker() {
-    while (next < items.length) {
-      const i = next++;
-      results[i] = await fn(items[i], i);
-    }
-  }
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
-  return results;
-}
-
-function concatBytes(chunks) {
-  const total = chunks.reduce((sum, c) => sum + c.byteLength, 0);
-  const out = new Uint8Array(total);
-  let offset = 0;
-  for (const c of chunks) {
-    out.set(c, offset);
-    offset += c.byteLength;
-  }
-  return out;
-}
-
-/** Chunk + synthesize + concatenate for drafts over one Workers AI call's safe size.
- *  Byte-level MP3 concat, not a re-encode (no ffmpeg/native audio tooling on Workers) —
- *  each chunk is independently encoded by Aura-2, so very long reads may have faint
- *  seams at chunk boundaries; acceptable for spoken-word content. Word timings are
- *  estimated separately over the whole (unchunked) text and don't need to know about
- *  this split. */
-/** Map any UI/Aura voice id onto a SpeechT5 sample profile the clone origin can render. */
-function mapVoiceForClone(voiceId) {
-  const raw = String(voiceId || "").trim().toLowerCase();
-  if (SAMPLE_VOICE_ALIASES[raw]) return raw;
-  // Stable Aura → sample colour mapping so Expo / System-adjacent ids still speak when AI is out.
-  const auraToSample = {
-    athena: "echo",
-    luna: "patricia",
-    orion: "martin-en",
-    apollo: "martin-fr",
-    asteria: "echo",
-    hera: "patricia",
-    iris: "patricia",
-    helena: "patricia",
-    andromeda: "echo",
-    cordelia: "echo",
-    phoebe: "echo",
-    thalia: "echo",
-    aurora: "echo",
-    electra: "echo",
-    arcas: "martin-en",
-    aries: "martin-en",
-    draco: "martin-en",
-    jupiter: "martin-en",
-    mars: "martin-en",
-    odysseus: "martin-en",
-    orpheus: "martin-en",
-    saturn: "martin-en",
-    zeus: "martin-en",
-    hermes: "martin-en",
-  };
-  return auraToSample[raw] || "echo";
-}
-
-function isNeuronsExhausted(message) {
-  const m = String(message || "").toLowerCase();
-  return m.includes("4006") || m.includes("neurons") || m.includes("daily free allocation");
-}
-
-function humanizeTtsError(message) {
-  if (isNeuronsExhausted(message)) {
-    return (
-      "Cloudflare Workers AI free neurons are exhausted for today. " +
-      "ECHO is falling back to the local clone path when available; " +
-      "upgrade Workers AI or wait for the daily reset. Original: " +
-      String(message).slice(0, 200)
-    );
-  }
-  return String(message || "TTS failed").slice(0, 400);
-}
-
-/**
- * Durable TTS: Workers AI first; on failure (esp. free-tier 4006) optional SpeechT5 clone
- * origin via ECHO_CLONE_TTS_URL (same tunnel the hardline site uses).
- */
-async function synthesizeLong(env, text, voiceId, speed) {
-  try {
-    return await synthesizeLongWorkersAi(env, text, voiceId, speed);
-  } catch (error) {
-    const message = String(error?.message || error);
-    const cloneResult = await synthesizeViaClone(env, text, voiceId, speed).catch(() => null);
-    if (cloneResult) return cloneResult;
-    throw new Error(humanizeTtsError(message));
-  }
-}
-
-async function synthesizeLongWorkersAi(env, text, voiceId, speed) {
-  const pieces = chunkText(text, PROVIDER_CHUNK_CHARS);
-  if (pieces.length === 1) {
-    return synthesizeWorkersAi(env, text, voiceId, speed);
-  }
-  const results = await mapWithConcurrency(pieces, CHUNK_CONCURRENCY, (piece) =>
-    synthesizeWorkersAi(env, piece, voiceId, speed),
-  );
-  const first = results[0];
-  return {
-    bytes: concatBytes(results.map((r) => r.bytes)),
-    mime: first.mime,
-    voice: first.voice,
-    applied: first.applied,
-    model: first.model,
-    backend: first.backend || "workers_ai",
-  };
-}
-
-async function synthesizeWorkersAi(env, text, voiceId, speed) {
-  const catalog = voiceCatalog(env);
-  const model = (env.ECHO_TTS_MODEL || DEFAULT_TTS_MODEL).trim();
-  // Keep the requested sample/profile id for API responses; Aura gets the mapped speaker.
-  const requested =
-    catalog.find((v) => v.id === String(voiceId || "").trim().toLowerCase())?.id ||
-    String(voiceId || "").trim().toLowerCase() ||
-    defaultVoiceId(env, catalog);
-  const auraVoice = resolveAuraVoiceId(requested, catalog, env);
-  const applied = clampSpeed(speed);
-  const input = buildTtsInput(model, text, auraVoice, applied);
-
-  // Aura does not take a speed param the same way as MeloTTS; keep applied for timing scale.
-  const raw = await env.AI.run(model, input);
-  const { bytes, mime } = await audioResultToBytes(raw);
-  if (!bytes.byteLength) {
-    throw new Error("Workers AI returned empty audio.");
-  }
-  return {
-    bytes,
-    mime,
-    voice: requested,
-    auraVoice,
-    applied,
-    model,
-    backend: "workers_ai",
-  };
-}
-
-async function synthesizeViaClone(env, text, voiceId, speed) {
-  const cloneBase = String(env.ECHO_CLONE_TTS_URL || "").trim().replace(/\/+$/, "");
-  if (!cloneBase) return null;
-  const cloneVoice = mapVoiceForClone(voiceId);
-  const applied = clampSpeed(speed);
-  const url = `${cloneBase}/api/tts/raw`;
-  const headers = { "Content-Type": "application/json" };
-  const key = String(env.ECHO_API_KEY || "").trim();
-  if (key) {
-    headers["X-Echo-Key"] = key;
-    headers.Authorization = `Bearer ${key}`;
-  }
-  const res = await fetch(url, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({ text, voice_id: cloneVoice, speed: applied }),
-  });
-  if (!res.ok) {
-    const detail = (await res.text().catch(() => "")).slice(0, 200);
-    throw new Error(`Clone TTS HTTP ${res.status}: ${detail}`);
-  }
-  const bytes = new Uint8Array(await res.arrayBuffer());
-  if (!bytes.byteLength) {
-    throw new Error("Clone TTS returned empty audio.");
-  }
-  const mime = res.headers.get("Content-Type") || "audio/wav";
-  return {
-    bytes,
-    mime,
-    voice: cloneVoice,
-    auraVoice: cloneVoice,
-    applied,
-    model: "speechT5-clone",
-    backend: "clone",
-  };
 }
 
 async function transcribe(env, audioBytes, filename) {
@@ -787,10 +385,7 @@ export default {
               }
             : { words, estimated_duration };
 
-        const backendLabel =
-          result.backend === "clone"
-            ? "SpeechT5-clone"
-            : "Cloudflare Workers AI";
+        const label = backendLabel(result);
 
         // Raw audio for legacy clients that expect a binary body on /api/echo-tts
         if (path === "/api/echo-tts" || (path === "/" && body.raw === true)) {
@@ -799,7 +394,7 @@ export default {
             headers: {
               ...corsHeaders(responseOrigin),
               "Content-Type": result.mime,
-              "X-Echo-Backend": backendLabel,
+              "X-Echo-Backend": label,
               "X-Echo-Model": result.model,
               "X-Echo-Voice": result.voice,
               "X-Echo-Speed": String(result.applied),
@@ -821,7 +416,7 @@ export default {
           200,
           responseOrigin,
           {
-            "X-Echo-Backend": backendLabel,
+            "X-Echo-Backend": label,
             "X-Echo-Model": result.model,
             "X-Echo-Voice": result.voice,
           },
@@ -969,9 +564,9 @@ export default {
 
       return json({ detail: "Not found." }, 404, responseOrigin);
     } catch (error) {
-      // Prefer 503 over 502: Cloudflare Pages often rewrites bare 502 into
-      // "error code: 502" and drops the JSON body the UI needs.
-      const message = humanizeTtsError(error?.message || error);
+      // Prefer 503 over 502: Cloudflare Pages rewrites bare 502 and strips the body.
+      // synthesizeLong already humanizes dual AI/clone failures; other paths pass through.
+      const message = String(error?.message || error).slice(0, 400);
       return json(
         {
           detail: message,
