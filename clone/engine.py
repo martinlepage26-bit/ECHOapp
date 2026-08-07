@@ -125,14 +125,35 @@ class CloneTTSEngine:
         ckpt_dir = _openvoice_checkpoint_dir()
         converter_ckpt = ckpt_dir / "converter" / "checkpoint.pth"
         fr_se = ckpt_dir / "base_speakers" / "ses" / "fr.pth"
-        if converter_ckpt.is_file() and fr_se.is_file():
+        patricia_se = self._target_se_cache_path("patricia")
+
+        unidic_ready = False
+        try:
+            import unidic
+
+            unidic_ready = any(Path(unidic.DICDIR).glob("*.bin"))
+        except Exception:
+            unidic_ready = False
+
+        if (
+            converter_ckpt.is_file()
+            and fr_se.is_file()
+            and unidic_ready
+            and patricia_se.is_file()
+        ):
             logger.info("warming up French pipeline...")
             self._ensure_openvoice_loaded()
             if "patricia" in VOICE_CATALOG and self.has_voice("patricia"):
                 self.synthesize("échauffement", "patricia", 1.0)
                 logger.info("French pipeline warm")
         else:
-            logger.info("OpenVoice checkpoints not cached; French will warm on first request")
+            logger.info(
+                "French pipeline resources not fully cached (checkpoints=%s unidic=%s target_se=%s); "
+                "French will warm on first request",
+                converter_ckpt.is_file() and fr_se.is_file(),
+                unidic_ready,
+                patricia_se.is_file(),
+            )
 
     def _embed_file(self, path: Path):
         import librosa
