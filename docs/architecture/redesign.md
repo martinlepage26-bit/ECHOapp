@@ -7,7 +7,7 @@
 > 2. **Custom clone voices are non-negotiable.** `echo`, `patricia`, `martin-en`, and `martin-fr` must remain available.
 > 3. **Remove voice dictation.** STT / transcription is out of scope.
 >
-> Removing dictation eliminates the only feature that required a separate speech modality. The system is now: read text, import files, listen, save drafts. One speech direction, one UI concern, one failure surface.
+> **Status: implemented.** Phases 0–5 are complete and deployed to `martin.govern-ai.ca/echo`. The clone sidecar now pre-loads and warms up its TTS engine at startup so the first request after a restart is fast (see `clone/server.py` and `clone/engine.py`).
 
 ---
 
@@ -95,7 +95,7 @@ ECHOapp/
 │   ├── voices/                  # echo.mp3, patricia.mp3, martin-en.mp3, martin-fr.mp3
 │   ├── requirements.txt
 │   └── systemd/
-│       ├── echo-clone.service
+│       ├── echo-clone-backend.service   # pre-loads + warms up engine at startup
 │       └── echo-clone-tunnel.service
 ├── tests/
 │   ├── ui/                      # Playwright E2E
@@ -171,7 +171,7 @@ A voice catalog entry now looks like:
 ### Deployment flow
 
 1. **Edge** (one command): `npm run build` → Vite builds `ui/dist`; `npm run deploy` → Wrangler deploys the Worker and serves `ui/dist` through the `[assets]` binding.
-2. **Clone sidecar** (separate, documented): start `clone/systemd/echo-clone.service` + tunnel on the host. The sidecar is required only for the four clone voices.
+2. **Clone sidecar** (separate, documented): start `clone/systemd/echo-clone-backend.service` + tunnel on the host. The sidecar is required only for the four clone voices. It pre-loads SpeechT5, the speaker encoder, OpenVoice/MeloTTS and voice embeddings during startup; allow ~30–60 s before the first health check passes.
 
 Static assets are immutable (`Cache-Control: public, max-age=31536000, immutable`) because filenames contain hashes. `index.html` is revalidated. No manual `?v=` cache buster.
 

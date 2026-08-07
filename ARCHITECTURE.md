@@ -44,6 +44,16 @@ Radically simplified: one UI, one Worker, one database, two explicit TTS provide
 | `worker/src/storage.ts` | D1 + draft payload | drafts CRUD |
 | `worker/src/auth.ts` | request + `ECHO_API_KEY` | 401 or pass |
 
+## Clone sidecar
+
+The local sidecar (`clone/`) serves the four clone voices. It previously
+loaded SpeechT5, the speaker encoder, OpenVoice/MeloTTS and voice
+embeddings lazily on the first request, causing a ~55 s cold start after a
+restart. It now pre-loads and warms up both pipelines during application
+startup, so the first request is fast.
+
+Startup cost is paid once at boot; the systemd unit allows 300 s for it.
+
 ## Deploy
 
 One command for the edge: `npm run build && npm run deploy`.
