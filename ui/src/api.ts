@@ -1,6 +1,7 @@
 /** ONE HTTP client for the ECHO UI. */
 
 const API_KEY = import.meta.env.VITE_ECHO_API_KEY || "";
+const API_BASE = (import.meta.env.VITE_API_BASE || "").replace(/\/+$/, "");
 
 export interface Voice {
   id: string;
@@ -45,21 +46,25 @@ async function handleError(res: Response): Promise<never> {
   throw new Error(body.detail || `HTTP ${res.status}`);
 }
 
+function api(path: string): string {
+  return API_BASE ? `${API_BASE}${path}` : path;
+}
+
 export async function fetchVoices(): Promise<{ voices: Voice[]; default: string }> {
-  const res = await fetch("/api/voices");
+  const res = await fetch(api("/api/voices"));
   if (!res.ok) await handleError(res);
   return res.json();
 }
 
 export async function fetchSampleText(): Promise<string> {
-  const res = await fetch("/api/sample-text");
+  const res = await fetch(api("/api/sample-text"));
   if (!res.ok) await handleError(res);
   const body = (await res.json()) as { text: string };
   return body.text;
 }
 
 export async function synthesize(text: string, voiceId: string, speed: number): Promise<TtsResult> {
-  const res = await fetch("/api/tts", {
+  const res = await fetch(api("/api/tts"), {
     method: "POST",
     headers: headers(),
     body: JSON.stringify({ text, voice_id: voiceId, speed }),
@@ -71,7 +76,7 @@ export async function synthesize(text: string, voiceId: string, speed: number): 
 export async function parseFile(file: File): Promise<ParsedFile> {
   const form = new FormData();
   form.append("file", file);
-  const res = await fetch("/api/parse", {
+  const res = await fetch(api("/api/parse"), {
     method: "POST",
     headers: API_KEY ? { "X-Echo-Key": API_KEY } : {},
     body: form,
@@ -81,13 +86,13 @@ export async function parseFile(file: File): Promise<ParsedFile> {
 }
 
 export async function listDrafts(): Promise<Draft[]> {
-  const res = await fetch("/api/drafts", { headers: API_KEY ? { "X-Echo-Key": API_KEY } : {} });
+  const res = await fetch(api("/api/drafts"), { headers: API_KEY ? { "X-Echo-Key": API_KEY } : {} });
   if (!res.ok) await handleError(res);
   return res.json();
 }
 
 export async function createDraft(title: string, text: string): Promise<Draft> {
-  const res = await fetch("/api/drafts", {
+  const res = await fetch(api("/api/drafts"), {
     method: "POST",
     headers: headers(),
     body: JSON.stringify({ title, text }),
@@ -97,7 +102,7 @@ export async function createDraft(title: string, text: string): Promise<Draft> {
 }
 
 export async function deleteDraft(id: string): Promise<void> {
-  const res = await fetch(`/api/drafts/${id}`, {
+  const res = await fetch(api(`/api/drafts/${id}`), {
     method: "DELETE",
     headers: API_KEY ? { "X-Echo-Key": API_KEY } : {},
   });

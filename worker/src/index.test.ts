@@ -46,6 +46,16 @@ describe("ECHO Worker", () => {
     expect(body.default).toBe("athena");
   });
 
+  it("strips the configured mount prefix from incoming paths", async () => {
+    env.ECHO_MOUNT_PREFIX = "/echo";
+    const request = new IncomingRequest("http://example.com/echo/api/voices");
+    const ctx = createExecutionContext();
+    const response = await worker.fetch(request, env, ctx);
+    await waitOnExecutionContext(ctx);
+    expect(response.status).toBe(200);
+    env.ECHO_MOUNT_PREFIX = "";
+  });
+
   it("GET /api/drafts without key returns 401", async () => {
     const request = new IncomingRequest("http://example.com/api/drafts");
     const ctx = createExecutionContext();

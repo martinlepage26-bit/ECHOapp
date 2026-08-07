@@ -45,6 +45,14 @@ function pathOf(url: URL): string {
   return url.pathname.replace(/\/+$/, "") || "/";
 }
 
+function stripMountPrefix(path: string, prefix: string): string {
+  if (!prefix || prefix === "/") return path;
+  const normalized = prefix.replace(/\/+$/, "");
+  if (path === normalized) return "/";
+  if (path.startsWith(`${normalized}/`)) return path.slice(normalized.length);
+  return path;
+}
+
 function clientIp(request: Request): string {
   return (
     request.headers.get("CF-Connecting-IP") ||
@@ -56,13 +64,35 @@ function clientIp(request: Request): string {
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
-    const path = pathOf(url);
+    const rawPath = pathOf(url);
+    const mountPrefix = (env.ECHO_MOUNT_PREFIX || "").trim();
+    const path = stripMountPrefix(rawPath, mountPrefix);
     const origin = request.headers.get("Origin") || "";
 
     // Static UI assets (and SPA fallback) are served by the [assets] binding.
     if (!path.startsWith("/api")) {
       if (env.ASSETS) {
-        return env.ASSETS.fetch(request);
+        // When mounted under a prefix (e.g. /echo), rewrite the URL so the
+        // assets binding can resolve ui/dist/index.html and ui/dist/assets/*.
+        const assetUrl = new URL(request.url);
+        if (mountPrefix && mountPrefix !== "/") {
+          const normalized = mountPrefix.replace(/\/+$/, "");
+          if (assetUrl.pathname === normalized) {
+            assetUrl.pathname = "/";
+          } else if (assetUrl.pathname.startsWith(`${normalized}/`)) {
+            assetUrl.pathname = assetUrl.pathname.slice(normalized.length);
+          }
+        }
+
+        const assetRequest = new Request(assetUrl, request);
+        const response = await env.ASSETS.fetch(assetRequest);
+        // SPA fallback: unknown client routes get index.html.
+        if (response.status === 404 && !assetUrl.pathname.startsWith("/assets/")) {
+          const fallback = new URL(assetUrl);
+          fallback.pathname = "/";
+          return env.ASSETS.fetch(new Request(fallback, request));
+        }
+        return response;
       }
       return new Response("ECHO UI assets not configured.", { status: 503 });
     }

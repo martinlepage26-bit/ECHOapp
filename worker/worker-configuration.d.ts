@@ -8,6 +8,7 @@ interface Env {
 
   // [vars]
   ECHO_TTS_MODEL?: string;
+  ECHO_MOUNT_PREFIX?: string;
   ECHO_RATE_LIMIT_WINDOW_MS?: string;
   ECHO_RATE_LIMIT_MAX?: string;
 
