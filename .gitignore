@@ -121,3 +121,11 @@ workers/echo-ai/.wrangler/
 # Test run output (regenerates per-run; one-time accidental Emergent-scaffold
 # commit, never updated since)
 test_reports/
+
+# ECHO web hardline build
+web/dist/
+web/node_modules/
+
+# Clone tunnel runtime (ephemeral trycloudflare URL + pids)
+backend/.clone-tunnel-url
+backend/.clone-pids

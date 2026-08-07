@@ -11,6 +11,8 @@ Tags: `current` (accurate today) · `reference` (historical, not contradicted) �
 | echo-provider-decouple-2026-07-11.md | reference | Foundational architecture doc — provider abstraction, Piper default, lazy Mongo still match backend/speech_providers.py. Only its "Live Deploy" cloudflared-tunnel URL is stale, superseded by echo-workers-ai-2026-08-01.md's live deploy. |
 | echo-readback-browser-smoke-2026-07-11.md | superseded | Manual/mock-API browser smoke superseded by the automated Playwright suite added in echoapp-readback-alignment-2026-07-13.md (frontend/tests/readback-web.spec.ts, still in repo). |
 | echoapp-readback-alignment-2026-07-13.md | reference | Describes frontend/tests/readback-web.spec.ts, which is the current frontend test asset (confirmed present). |
-| echo-workers-ai-2026-08-01.md | current | Most recent; matches the live Workers AI architecture confirmed this session. |
+| echo-workers-ai-2026-08-01.md | reference | Workers AI wiring; first recorded free-neuron 4006. Superseded for production durability by echo-durable-speech-repair-2026-08-07.md. |
+| echo-merge-webapp-2026-08-06.md | reference | Canonical tree under web-apps/ECHOapp; hardline on martin.govern-ai.ca/echo. |
+| echo-durable-speech-repair-2026-08-07.md | current | Permanent repair: Worker + Pages clone fallback when Workers AI neurons are out; no bare-502 error strip. |
 
 No file is moved or deleted; this index is advisory only.

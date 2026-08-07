@@ -1,0 +1,276 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="ECHO is a browser-native readback deck with file import, visible transport, and live word tracking."
+    />
+    <meta name="theme-color" content="#2e8dff" />
+    <link rel="stylesheet" href="/echo/echo-standalone.css" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Anton&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <title>ECHO | Browser Voice Reader</title>
+  </head>
+  <!--
+    ECHO design lock:
+    Preserve the hardline front-console surface, the intro -> editor -> controls -> readback order,
+    and the black alloy / paper deck / visible-function styling unless an explicit redesign is requested.
+    If this visual contract changes, update the smoke lock markers in scripts/smoke.mjs.
+  -->
+  <body class="echo-standalone" data-echo-page-lock="hardline-reader">
+    <div
+      class="echo-shell"
+      data-echo-app
+      data-echo-page-shell="front-console"
+      data-echo-design-lock="hardline-reader-2026-04-02"
+    >
+      <main class="echo-main">
+
+        <section class="echo-grid" aria-labelledby="echo-workbench-title">
+          <header class="echo-header">
+            <a class="echo-brand" href="/echo/">
+              <span class="echo-mark">ECHO</span>
+            </a>
+            <div class="echo-header-hero">
+              <div class="echo-speaker" data-echo-speaker aria-hidden="true">
+                <span class="echo-speaker-icon">
+                  <span class="echo-amp-core"></span>
+                  <span class="echo-amp-ring echo-amp-ring-inner"></span>
+                  <span class="echo-amp-ring echo-amp-ring-outer"></span>
+                </span>
+              </div>
+              <div class="echo-header-profiles">
+                <div class="echo-profile-list" role="group" aria-label="ECHO voice profiles">
+                  <div class="echo-profile-row echo-profile-row-echo">
+                    <div class="echo-sample-list" role="group" aria-label="Readaloud voices">
+                      <button class="echo-profile-chip" type="button" data-echo-profile="echo">Echo</button>
+                      <button class="echo-profile-chip" type="button" data-echo-profile="patricia" title="Charming, clear and young">Patricia</button>
+                      <button class="echo-profile-chip" type="button" data-echo-profile="martin-en">Martin EN</button>
+                      <button class="echo-profile-chip" type="button" data-echo-profile="martin-fr">Martin FR</button>
+                      <button class="echo-profile-chip" type="button" data-echo-profile="system">System</button>
+                    </div>
+                    <p class="echo-profile-copy" data-echo-profile-copy></p>
+                  </div>
+                  <div class="echo-profile-row echo-profile-row-system">
+                    <select
+                      id="echo-voice"
+                      class="echo-input echo-header-voice-select"
+                      aria-label="System voices"
+                      data-echo-voice
+                    ></select>
+                    <p class="echo-voice-meta" data-echo-voice-meta></p>
+                  </div>
+                  <div class="echo-profile-row echo-profile-row-samples" data-echo-voice-samples>
+                    <p class="echo-samples-label">Hear sample</p>
+                    <div class="echo-sample-list" role="group" aria-label="Voice sample previews">
+                      <button class="echo-sample-chip" type="button" data-echo-voice-sample data-sample-id="echo" data-sample-src="/echo/voices/echo.mp3" data-sample-label="Echo">▶ Echo</button>
+                      <button class="echo-sample-chip" type="button" data-echo-voice-sample data-sample-id="patricia" data-sample-src="/echo/voices/patricia.mp3" data-sample-label="Patricia" title="Charming, clear and young">▶ Patricia</button>
+                      <button class="echo-sample-chip" type="button" data-echo-voice-sample data-sample-id="martin-en" data-sample-src="/echo/voices/martin-en.mp3" data-sample-label="Martin EN">▶ Martin EN</button>
+                      <button class="echo-sample-chip" type="button" data-echo-voice-sample data-sample-id="martin-fr" data-sample-src="/echo/voices/martin-fr.mp3" data-sample-label="Martin FR">▶ Martin FR</button>
+                    </div>
+                    <p class="echo-samples-hint" data-echo-sample-hint>
+                      Select a voice, then Play to read your full draft. ▶ clips are short previews only.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </header>
+
+          <section class="echo-panel echo-editor-panel" data-echo-lock-block="editor-panel">
+            <div class="echo-panel-head">
+              <div>
+                <p class="echo-eyebrow">Source</p>
+                <h2 id="echo-workbench-title">Intake</h2>
+              </div>
+              <div class="echo-panel-actions">
+                <button class="echo-ghost-button" type="button" data-echo-sample>Load sample</button>
+                <button class="echo-ghost-button" type="button" data-echo-clear>Clear</button>
+                <button class="echo-ghost-button echo-collapse-toggle" type="button" data-echo-intake-toggle aria-expanded="true" aria-controls="echo-intake-body">Collapse</button>
+              </div>
+            </div>
+
+            <div class="echo-editor-surface" id="echo-intake-body" data-echo-intake-body>
+              <div
+                class="echo-dropzone"
+                data-echo-dropzone
+                tabindex="0"
+                role="button"
+                aria-label="Drop file here or click to choose file"
+              >
+                <div>
+                  <p><strong>Drop a file here.</strong></p>
+                  <p>
+                    Supports <code>.txt</code>, <code>.md</code>, <code>.docx</code>, and
+                    <code>.pdf</code>.
+                  </p>
+                </div>
+                <span class="echo-dropzone-cta">Choose file</span>
+                <input
+                  class="echo-file-input"
+                  data-echo-file-input
+                  type="file"
+                  accept=".txt,.md,.markdown,.docx,.pdf"
+                />
+              </div>
+
+              <div class="echo-meta-row">
+                <p class="echo-file-meta" data-echo-file-meta>No file selected yet.</p>
+                <p class="echo-text-meta" data-echo-text-meta>0 words · 0 chars · ~0 min</p>
+              </div>
+
+              <label class="echo-privacy-toggle" for="echo-keep-draft">
+                <input id="echo-keep-draft" type="checkbox" data-echo-keep-draft />
+                <span>
+                  <strong>Keep draft on this device</strong>
+                  <small>Off by default. When off, ECHO clears text on page close.</small>
+                </span>
+              </label>
+
+              <label class="echo-field echo-field-full" for="echo-text">
+                <span class="echo-field-label">Text Body</span>
+                <textarea
+                  id="echo-text"
+                  class="echo-textarea"
+                  data-echo-text
+                  rows="18"
+                  placeholder="Paste writing here or import a file. ECHO keeps the text on this device and reads it back with the voices available in this browser."
+                ></textarea>
+              </label>
+            </div>
+          </section>
+
+          <aside class="echo-panel echo-side-panel" data-echo-lock-block="controls-panel">
+            <div class="echo-transport-strip">
+              <p class="echo-status echo-transport-status" data-echo-status data-tone="info" hidden aria-hidden="true"></p>
+              <span class="echo-header-ready">Ready</span>
+              <div class="echo-runner">
+                <button class="echo-button primary" type="button" data-echo-play aria-label="Play">▶</button>
+                <button class="echo-button secondary" type="button" data-echo-pause aria-label="Pause">❚❚</button>
+                <button class="echo-button secondary danger" type="button" data-echo-stop aria-label="Stop">■</button>
+              </div>
+              <div class="echo-transport-tuning" aria-label="Playback tuning">
+                <label class="echo-mini-tuning" for="echo-rate">
+                  <span class="echo-mini-tuning-label">Rate</span>
+                  <input id="echo-rate" data-echo-rate type="range" min="0.6" max="1.6" step="0.05" value="1" />
+                  <span class="echo-mini-tuning-value" data-echo-rate-value>1.00</span>
+                </label>
+                <label class="echo-mini-tuning" for="echo-pitch">
+                  <span class="echo-mini-tuning-label">Pitch</span>
+                  <input id="echo-pitch" data-echo-pitch type="range" min="0.6" max="1.5" step="0.05" value="1" />
+                  <span class="echo-mini-tuning-value" data-echo-pitch-value>1.00</span>
+                </label>
+                <label class="echo-mini-tuning" for="echo-volume">
+                  <span class="echo-mini-tuning-label">Vol</span>
+                  <input id="echo-volume" data-echo-volume type="range" min="0.1" max="1" step="0.05" value="1" />
+                  <span class="echo-mini-tuning-value" data-echo-volume-value>1.00</span>
+                </label>
+              </div>
+            </div>
+            <div hidden aria-hidden="true">
+              <div data-echo-waveform></div>
+              <div class="echo-progress-bar" data-echo-progress></div>
+              <p data-echo-progress-label>Idle</p>
+            </div>
+          </aside>
+
+          <section
+            class="echo-panel echo-reader-panel"
+            aria-labelledby="echo-reader-title"
+            data-echo-lock-block="readback-panel"
+          >
+            <div class="echo-panel-head">
+              <div>
+                <p class="echo-eyebrow">Readback</p>
+                <h2 id="echo-reader-title">Read Along</h2>
+              </div>
+            </div>
+            <div class="echo-output-shell">
+              <div class="echo-output" data-echo-output></div>
+            </div>
+            <p class="echo-note">Word highlighting varies by browser.</p>
+          </section>
+
+          <section
+            class="echo-panel echo-console-panel"
+            aria-labelledby="echo-dictation-title"
+            data-echo-lock-block="dictation-panel"
+          >
+            <div class="echo-panel-head">
+              <div>
+                <p class="echo-eyebrow">Dictation Console</p>
+                <h2 id="echo-dictation-title">Transcript</h2>
+              </div>
+            </div>
+            <p class="echo-panel-summary">
+              Record or import. The clip goes to the transcription worker. The text stays here.
+            </p>
+
+            <div class="echo-console-shell">
+              <div class="echo-console-toolbar">
+                <button class="echo-button primary" type="button" data-echo-record>Record</button>
+                <button class="echo-button secondary" type="button" data-echo-audio-load>
+                  Import clip
+                </button>
+                <button class="echo-button secondary danger" type="button" data-echo-record-stop>
+                  Stop
+                </button>
+                <button class="echo-button secondary" type="button" data-echo-transcript-regenerate>
+                  Regenerate
+                </button>
+                <button class="echo-button secondary" type="button" data-echo-transcript-clear>
+                  Clear transcript
+                </button>
+                <button class="echo-button secondary" type="button" data-echo-transcript-download>
+                  Download .md
+                </button>
+                <input
+                  class="echo-file-input"
+                  data-echo-audio-input
+                  type="file"
+                  accept=".m4a,.mp4,.mp3,.wav,.ogg,.webm,audio/*"
+                />
+              </div>
+
+              <div class="echo-console-meta">
+                <p class="echo-status" data-echo-dictation-status data-tone="info">
+                  Microphone idle.
+                </p>
+                <p class="echo-progress-label" data-echo-dictation-meta>
+                  Capture a clip to render transcript text here.
+                </p>
+              </div>
+
+              <div class="echo-console-output-shell">
+                <div class="echo-output-rail" aria-hidden="true">
+                  <span>Transcript Console</span>
+                  <span data-echo-dictation-duration>00:00.0</span>
+                </div>
+                <pre class="echo-console-output" data-echo-dictation-output>
+&gt; microphone standby
+&gt; press Record to capture
+&gt; export as markdown when ready</pre
+                >
+              </div>
+
+              <p class="echo-note">Audio stays on device. Only the clip goes to the worker.</p>
+            </div>
+          </section>
+        </section>
+      </main>
+    </div>
+
+    <!--
+      Load a pre-bundled static module. Astro's inline script bundler was tree-shaking
+      the entire reader app down to a ~3.5KB stub with zero event listeners.
+      Canonical source: web-apps/ECHOapp/web — built by scripts/build-web.mjs; site syncs output to public/echo.
+    -->
+    <script type="module" src="/echo/echo-reader.app.js?v=20260801-bracefix2"></script>
+  </body>
+</html>

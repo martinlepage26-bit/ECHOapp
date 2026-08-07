@@ -40,11 +40,20 @@ echo "==> Deploy Worker + static assets (account $ACCOUNT_ID)"
 (
   cd "$WORKER"
   export CLOUDFLARE_ACCOUNT_ID="$ACCOUNT_ID"
+  # Prefer OAuth / full token: a limited "publicsurface" API token cannot deploy Workers.
+  unset CLOUDFLARE_API_TOKEN || true
   if [[ ! -d node_modules/wrangler ]]; then
     npm install --no-fund --no-audit
   fi
   # Keep Worker secret in sync with local key used in the bundle
   printf '%s' "$ECHO_API_KEY" | npx wrangler secret put ECHO_API_KEY
+  # Durable fallback when free Workers AI neurons are exhausted (same tunnel as hardline).
+  if [[ -f "$BACKEND/.clone-tunnel-url" ]]; then
+    CLONE_URL="$(tr -d '[:space:]' <"$BACKEND/.clone-tunnel-url")"
+    if [[ -n "$CLONE_URL" ]]; then
+      printf '%s' "$CLONE_URL" | npx wrangler secret put ECHO_CLONE_TTS_URL
+    fi
+  fi
   npx wrangler deploy
 )
 

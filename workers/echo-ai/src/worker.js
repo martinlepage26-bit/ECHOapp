@@ -63,6 +63,22 @@ const AURA_VOICES = [
   { id: "zeus", name: "Zeus", tag: "commanding · deep" },
 ];
 
+/**
+ * Hardline /echo sample profiles — first-class live readaloud IDs.
+ * Each maps to a stable Aura speaker so any draft can be synthesized on the edge
+ * without the optional SpeechT5 clone origin. UI keeps the sample name (echo, …).
+ */
+const SAMPLE_VOICES = [
+  { id: "echo", name: "Echo", tag: "sample · live", aura: "athena" },
+  { id: "patricia", name: "Patricia", tag: "charming · clear · young", aura: "luna" },
+  { id: "martin-en", name: "Martin EN", tag: "english · live", aura: "orion" },
+  { id: "martin-fr", name: "Martin FR", tag: "français · live", aura: "apollo" },
+];
+
+const SAMPLE_VOICE_ALIASES = Object.fromEntries(
+  SAMPLE_VOICES.map((v) => [v.id, v.aura]),
+);
+
 function parseCsv(raw) {
   return String(raw || "")
     .split(",")
@@ -72,17 +88,38 @@ function parseCsv(raw) {
 
 function voiceCatalog(env) {
   const configured = parseCsv(env.ECHO_TTS_VOICES);
-  if (!configured.length) return AURA_VOICES;
-  return configured.map((id) => {
-    const known = AURA_VOICES.find((v) => v.id === id);
-    return known || { id, name: id, tag: "workers ai · aura" };
-  });
+  const aura = configured.length
+    ? configured.map((id) => {
+        const known = AURA_VOICES.find((v) => v.id === id);
+        return known || { id, name: id, tag: "workers ai · aura" };
+      })
+    : AURA_VOICES;
+  // Sample profiles first so clients and the hardline UI see them as real voices.
+  const sampleIds = new Set(SAMPLE_VOICES.map((v) => v.id));
+  return [
+    ...SAMPLE_VOICES.map(({ id, name, tag }) => ({ id, name, tag })),
+    ...aura.filter((v) => !sampleIds.has(v.id)),
+  ];
 }
 
 function defaultVoiceId(env, catalog) {
   const preferred = (env.ECHO_DEFAULT_VOICE || DEFAULT_VOICE).trim();
   if (catalog.some((v) => v.id === preferred)) return preferred;
+  // Prefer the Echo sample profile when present.
+  if (catalog.some((v) => v.id === "echo")) return "echo";
   return catalog[0]?.id || DEFAULT_VOICE;
+}
+
+/** Resolve a UI/sample voice id to the Aura speaker actually sent to Workers AI. */
+function resolveAuraVoiceId(voiceId, catalog, env) {
+  const raw = String(voiceId || "").trim().toLowerCase();
+  if (SAMPLE_VOICE_ALIASES[raw]) return SAMPLE_VOICE_ALIASES[raw];
+  if (catalog.some((v) => v.id === raw) && !SAMPLE_VOICE_ALIASES[raw]) {
+    // Already an Aura id present in the catalog.
+    if (AURA_VOICES.some((v) => v.id === raw)) return raw;
+  }
+  const fallback = defaultVoiceId(env, catalog);
+  return SAMPLE_VOICE_ALIASES[fallback] || fallback;
 }
 
 function clampSpeed(speed) {
@@ -307,13 +344,79 @@ function concatBytes(chunks) {
  *  seams at chunk boundaries; acceptable for spoken-word content. Word timings are
  *  estimated separately over the whole (unchunked) text and don't need to know about
  *  this split. */
+/** Map any UI/Aura voice id onto a SpeechT5 sample profile the clone origin can render. */
+function mapVoiceForClone(voiceId) {
+  const raw = String(voiceId || "").trim().toLowerCase();
+  if (SAMPLE_VOICE_ALIASES[raw]) return raw;
+  // Stable Aura → sample colour mapping so Expo / System-adjacent ids still speak when AI is out.
+  const auraToSample = {
+    athena: "echo",
+    luna: "patricia",
+    orion: "martin-en",
+    apollo: "martin-fr",
+    asteria: "echo",
+    hera: "patricia",
+    iris: "patricia",
+    helena: "patricia",
+    andromeda: "echo",
+    cordelia: "echo",
+    phoebe: "echo",
+    thalia: "echo",
+    aurora: "echo",
+    electra: "echo",
+    arcas: "martin-en",
+    aries: "martin-en",
+    draco: "martin-en",
+    jupiter: "martin-en",
+    mars: "martin-en",
+    odysseus: "martin-en",
+    orpheus: "martin-en",
+    saturn: "martin-en",
+    zeus: "martin-en",
+    hermes: "martin-en",
+  };
+  return auraToSample[raw] || "echo";
+}
+
+function isNeuronsExhausted(message) {
+  const m = String(message || "").toLowerCase();
+  return m.includes("4006") || m.includes("neurons") || m.includes("daily free allocation");
+}
+
+function humanizeTtsError(message) {
+  if (isNeuronsExhausted(message)) {
+    return (
+      "Cloudflare Workers AI free neurons are exhausted for today. " +
+      "ECHO is falling back to the local clone path when available; " +
+      "upgrade Workers AI or wait for the daily reset. Original: " +
+      String(message).slice(0, 200)
+    );
+  }
+  return String(message || "TTS failed").slice(0, 400);
+}
+
+/**
+ * Durable TTS: Workers AI first; on failure (esp. free-tier 4006) optional SpeechT5 clone
+ * origin via ECHO_CLONE_TTS_URL (same tunnel the hardline site uses).
+ */
 async function synthesizeLong(env, text, voiceId, speed) {
+  try {
+    return await synthesizeLongWorkersAi(env, text, voiceId, speed);
+  } catch (error) {
+    const message = String(error?.message || error);
+    const cloneResult = await synthesizeViaClone(env, text, voiceId, speed).catch(() => null);
+    if (cloneResult) return cloneResult;
+    throw new Error(humanizeTtsError(message));
+  }
+}
+
+async function synthesizeLongWorkersAi(env, text, voiceId, speed) {
   const pieces = chunkText(text, PROVIDER_CHUNK_CHARS);
   if (pieces.length === 1) {
-    return synthesize(env, text, voiceId, speed);
+    return synthesizeWorkersAi(env, text, voiceId, speed);
   }
   const results = await mapWithConcurrency(pieces, CHUNK_CONCURRENCY, (piece) =>
-    synthesize(env, piece, voiceId, speed),
+    synthesizeWorkersAi(env, piece, voiceId, speed),
   );
   const first = results[0];
   return {
@@ -322,16 +425,21 @@ async function synthesizeLong(env, text, voiceId, speed) {
     voice: first.voice,
     applied: first.applied,
     model: first.model,
+    backend: first.backend || "workers_ai",
   };
 }
 
-async function synthesize(env, text, voiceId, speed) {
+async function synthesizeWorkersAi(env, text, voiceId, speed) {
   const catalog = voiceCatalog(env);
   const model = (env.ECHO_TTS_MODEL || DEFAULT_TTS_MODEL).trim();
-  const voice =
-    catalog.find((v) => v.id === voiceId)?.id || defaultVoiceId(env, catalog);
+  // Keep the requested sample/profile id for API responses; Aura gets the mapped speaker.
+  const requested =
+    catalog.find((v) => v.id === String(voiceId || "").trim().toLowerCase())?.id ||
+    String(voiceId || "").trim().toLowerCase() ||
+    defaultVoiceId(env, catalog);
+  const auraVoice = resolveAuraVoiceId(requested, catalog, env);
   const applied = clampSpeed(speed);
-  const input = buildTtsInput(model, text, voice, applied);
+  const input = buildTtsInput(model, text, auraVoice, applied);
 
   // Aura does not take a speed param the same way as MeloTTS; keep applied for timing scale.
   const raw = await env.AI.run(model, input);
@@ -339,7 +447,52 @@ async function synthesize(env, text, voiceId, speed) {
   if (!bytes.byteLength) {
     throw new Error("Workers AI returned empty audio.");
   }
-  return { bytes, mime, voice, applied, model };
+  return {
+    bytes,
+    mime,
+    voice: requested,
+    auraVoice,
+    applied,
+    model,
+    backend: "workers_ai",
+  };
+}
+
+async function synthesizeViaClone(env, text, voiceId, speed) {
+  const cloneBase = String(env.ECHO_CLONE_TTS_URL || "").trim().replace(/\/+$/, "");
+  if (!cloneBase) return null;
+  const cloneVoice = mapVoiceForClone(voiceId);
+  const applied = clampSpeed(speed);
+  const url = `${cloneBase}/api/tts/raw`;
+  const headers = { "Content-Type": "application/json" };
+  const key = String(env.ECHO_API_KEY || "").trim();
+  if (key) {
+    headers["X-Echo-Key"] = key;
+    headers.Authorization = `Bearer ${key}`;
+  }
+  const res = await fetch(url, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ text, voice_id: cloneVoice, speed: applied }),
+  });
+  if (!res.ok) {
+    const detail = (await res.text().catch(() => "")).slice(0, 200);
+    throw new Error(`Clone TTS HTTP ${res.status}: ${detail}`);
+  }
+  const bytes = new Uint8Array(await res.arrayBuffer());
+  if (!bytes.byteLength) {
+    throw new Error("Clone TTS returned empty audio.");
+  }
+  const mime = res.headers.get("Content-Type") || "audio/wav";
+  return {
+    bytes,
+    mime,
+    voice: cloneVoice,
+    auraVoice: cloneVoice,
+    applied,
+    model: "speechT5-clone",
+    backend: "clone",
+  };
 }
 
 async function transcribe(env, audioBytes, filename) {
@@ -634,6 +787,11 @@ export default {
               }
             : { words, estimated_duration };
 
+        const backendLabel =
+          result.backend === "clone"
+            ? "SpeechT5-clone"
+            : "Cloudflare Workers AI";
+
         // Raw audio for legacy clients that expect a binary body on /api/echo-tts
         if (path === "/api/echo-tts" || (path === "/" && body.raw === true)) {
           return new Response(result.bytes, {
@@ -641,7 +799,7 @@ export default {
             headers: {
               ...corsHeaders(responseOrigin),
               "Content-Type": result.mime,
-              "X-Echo-Backend": "Cloudflare Workers AI",
+              "X-Echo-Backend": backendLabel,
               "X-Echo-Model": result.model,
               "X-Echo-Voice": result.voice,
               "X-Echo-Speed": String(result.applied),
@@ -658,11 +816,12 @@ export default {
             char_count: text.length,
             words: scaled.words,
             estimated_duration: scaled.estimated_duration,
+            backend: result.backend || "workers_ai",
           },
           200,
           responseOrigin,
           {
-            "X-Echo-Backend": "Cloudflare Workers AI",
+            "X-Echo-Backend": backendLabel,
             "X-Echo-Model": result.model,
             "X-Echo-Voice": result.voice,
           },
@@ -810,14 +969,16 @@ export default {
 
       return json({ detail: "Not found." }, 404, responseOrigin);
     } catch (error) {
-      const message = String(error?.message || error).slice(0, 400);
+      // Prefer 503 over 502: Cloudflare Pages often rewrites bare 502 into
+      // "error code: 502" and drops the JSON body the UI needs.
+      const message = humanizeTtsError(error?.message || error);
       return json(
         {
           detail: message,
           ok: false,
           error: message,
         },
-        502,
+        503,
         responseOrigin,
       );
     }

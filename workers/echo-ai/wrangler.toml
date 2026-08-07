@@ -8,6 +8,8 @@ name = "echo-ai"
 main = "src/worker.js"
 compatibility_date = "2026-07-31"
 compatibility_flags = ["nodejs_compat"]
+# Personal Martin account that owns echo-ai + D1 echo-ai-db
+account_id = "1713c51cc6fbcf8d7143526b93495b76"
 
 [ai]
 binding = "AI"
