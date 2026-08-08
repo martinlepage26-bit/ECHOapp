@@ -7,6 +7,7 @@ let startTime = 0;
 let activeWords: WordTiming[] = [];
 let onWordCallback: ((index: number) => void) | null = null;
 let onEndedCallback: (() => void) | null = null;
+let onErrorCallback: ((error: Error) => void) | null = null;
 
 export interface SystemVoice {
   id: string;
@@ -36,6 +37,7 @@ function cleanup() {
   activeWords = [];
   onWordCallback = null;
   onEndedCallback = null;
+  onErrorCallback = null;
 }
 
 export async function ensureVoicesLoaded(): Promise<void> {
@@ -79,16 +81,21 @@ export function speakSystem(
   speed: number,
   onWord: (index: number) => void,
   onEnded?: () => void,
+  onError?: (error: Error) => void,
 ): void {
   stopSystem();
 
   if (typeof window === "undefined" || !window.speechSynthesis) {
-    throw new Error("Browser speech synthesis is not available.");
+    onError?.(new Error("Browser speech synthesis is not available."));
+    return;
   }
 
   const voices = window.speechSynthesis.getVoices();
   const voice = voices.find((v) => v.name === voiceId);
-  if (!voice) throw new Error(`System voice '${voiceId}' not found.`);
+  if (!voice) {
+    onError?.(new Error(`System voice '${voiceId}' not found.`));
+    return;
+  }
 
   const utterance = new SpeechSynthesisUtterance(text);
   utterance.voice = voice;
@@ -98,6 +105,7 @@ export function speakSystem(
   activeWords = estimateWordTimings(text).words;
   onWordCallback = onWord;
   onEndedCallback = onEnded ?? null;
+  onErrorCallback = onError ?? null;
 
   utterance.onstart = () => {
     startTime = performance.now();
@@ -113,7 +121,8 @@ export function speakSystem(
 
   utterance.onerror = (event) => {
     cleanup();
-    throw new Error(`Speech synthesis error: ${event.error}`);
+    const err = new Error(`Speech synthesis error: ${event.error}`);
+    onErrorCallback?.(err);
   };
 
   window.speechSynthesis.speak(utterance);

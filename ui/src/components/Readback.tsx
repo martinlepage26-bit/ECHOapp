@@ -57,18 +57,23 @@ export function Readback({
     onError(null);
 
     if (selectedVoice.provider === "system") {
-      try {
-        activeProvider.current = "system";
-        setStatus(`Playing · ${selectedVoice.name}`);
-        setIsPlaying(true);
-        setIsPaused(false);
-        speakSystem(text, selectedVoice.id, speed, handleWord, handleEnded);
-      } catch (e) {
-        activeProvider.current = null;
-        setStatus("Error");
-        onError(String((e as Error).message || e));
-        setIsPlaying(false);
-      }
+      activeProvider.current = "system";
+      setStatus(`Playing · ${selectedVoice.name}`);
+      setIsPlaying(true);
+      setIsPaused(false);
+      speakSystem(
+        text,
+        selectedVoice.id,
+        speed,
+        handleWord,
+        handleEnded,
+        (err) => {
+          activeProvider.current = null;
+          setStatus("Error");
+          onError(err.message);
+          setIsPlaying(false);
+        },
+      );
       return;
     }
 
