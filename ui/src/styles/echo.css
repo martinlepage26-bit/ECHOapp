@@ -99,6 +99,22 @@ body.echo-standalone ::selection {
   align-items: start;
 }
 
+.echo-grid.is-playing {
+  grid-template-areas:
+    "header header"
+    "transport transport"
+    "reader reader"
+    "console console";
+}
+
+.echo-grid.is-playing .echo-editor-panel {
+  display: none;
+}
+
+.echo-grid.is-playing .echo-reader-panel {
+  grid-area: reader;
+}
+
 .echo-header,
 .echo-panel {
   border: 1px solid var(--echo-border);

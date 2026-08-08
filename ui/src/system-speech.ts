@@ -97,12 +97,17 @@ export function speakSystem(
     return;
   }
 
+  const scaledSpeed = Math.max(0.5, Math.min(2, speed));
   const utterance = new SpeechSynthesisUtterance(text);
   utterance.voice = voice;
-  utterance.rate = Math.max(0.5, Math.min(2, speed));
+  utterance.rate = scaledSpeed;
   utterance.pitch = 1;
 
-  activeWords = estimateWordTimings(text).words;
+  activeWords = estimateWordTimings(text).words.map((w) => ({
+    ...w,
+    start: Number((w.start / scaledSpeed).toFixed(3)),
+    end: Number((w.end / scaledSpeed).toFixed(3)),
+  }));
   onWordCallback = onWord;
   onEndedCallback = onEnded ?? null;
   onErrorCallback = onError ?? null;

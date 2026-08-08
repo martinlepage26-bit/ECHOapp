@@ -172,8 +172,10 @@ export function Readback({
     return formatDuration(seconds);
   }, [words.length, speed]);
 
+  const inPlayback = isPlaying || isPaused;
+
   return (
-    <section className="echo-grid" aria-labelledby="echo-workbench-title">
+    <section className={`echo-grid ${inPlayback ? "is-playing" : ""}`} aria-labelledby="echo-workbench-title">
       <section className="echo-panel echo-editor-panel">
         <div className="echo-panel-head">
           <div>
