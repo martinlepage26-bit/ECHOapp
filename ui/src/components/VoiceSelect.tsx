@@ -7,6 +7,18 @@ interface Props {
   onSelect: (id: string) => void;
 }
 
+function providerLabel(voice: Voice): string {
+  if (voice.provider === "clone") return "clone";
+  if (voice.provider === "system") return "system";
+  return "unknown";
+}
+
+function providerDescription(voice: Voice): string {
+  if (voice.provider === "clone") return "Served by the local clone sidecar.";
+  if (voice.provider === "system") return "Served by your browser's built-in Google voice.";
+  return "";
+}
+
 export function VoiceSelect({ voices, selectedId, defaultId, onSelect }: Props) {
   const selected = voices.find((v) => v.id === selectedId) || voices.find((v) => v.id === defaultId);
 
@@ -25,7 +37,7 @@ export function VoiceSelect({ voices, selectedId, defaultId, onSelect }: Props) 
         >
           {voices.map((voice) => (
             <option key={voice.id} value={voice.id}>
-              {voice.name} · {voice.provider === "clone" ? "clone" : "Workers AI"}
+              {voice.name} · {providerLabel(voice)}
               {voice.tag ? ` · ${voice.tag}` : ""}
             </option>
           ))}
@@ -33,9 +45,7 @@ export function VoiceSelect({ voices, selectedId, defaultId, onSelect }: Props) 
       </div>
       {selected && (
         <p className="echo-voice-meta" style={{ display: "block" }}>
-          {selected.provider === "clone"
-            ? "Served by the local clone sidecar."
-            : "Served by Cloudflare Workers AI."}
+          {providerDescription(selected)}
         </p>
       )}
     </div>

@@ -8,9 +8,6 @@ compatibility_date = "2025-09-06"
 compatibility_flags = ["nodejs_compat"]
 account_id = "1713c51cc6fbcf8d7143526b93495b76"
 
-[ai]
-binding = "AI"
-
 # Serve the Vite-built single-page UI. API routes run the Worker first.
 [assets]
 directory = "ui/dist"
@@ -36,5 +33,4 @@ database_id = "08492e49-270b-4926-bacf-68be86b65537"
 migrations_dir = "worker/migrations"
 
 [vars]
-ECHO_TTS_MODEL = "@cf/deepgram/aura-2-en"
 ECHO_MOUNT_PREFIX = "/echo"

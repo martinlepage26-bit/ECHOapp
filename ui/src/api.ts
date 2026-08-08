@@ -6,7 +6,7 @@ const API_BASE = (import.meta.env.VITE_API_BASE || "").replace(/\/+$/, "");
 export interface Voice {
   id: string;
   name: string;
-  provider: "workers_ai" | "clone";
+  provider: "system" | "clone";
   tag?: string;
 }
 
@@ -14,7 +14,7 @@ export interface TtsResult {
   audio_base64: string;
   mime: string;
   voice_id: string;
-  provider: "workers_ai" | "clone";
+  provider: "clone";
   word_count: number;
   char_count: number;
   words: Array<{ word: string; start: number; end: number; index: number }>;

@@ -23,27 +23,27 @@ describe("ECHO Worker", () => {
       service: string;
       status: string;
       voices: number;
-      providers: { workers_ai: string; clone: string; storage: string };
+      providers: { clone: string; storage: string };
     };
     expect(body.service).toBe("echo");
     expect(body.status).toBe("online");
-    expect(body.voices).toBe(28);
-    expect(body.providers.workers_ai).toBe("ok");
+    expect(body.voices).toBe(4);
+    expect(["ok", "unconfigured", "unreachable"].some((s) => body.providers.clone.startsWith(s))).toBe(true);
     expect(body.providers.storage).toBe("ok");
   });
 
-  it("GET /api/voices returns clone voices first then aura voices", async () => {
+  it("GET /api/voices returns clone voices only", async () => {
     const request = new IncomingRequest("http://example.com/api/voices");
     const ctx = createExecutionContext();
     const response = await worker.fetch(request, env, ctx);
     await waitOnExecutionContext(ctx);
     expect(response.status).toBe(200);
     const body = (await response.json()) as { voices: Array<{ id: string; provider: string }>; default: string };
+    expect(body.voices).toHaveLength(4);
     expect(body.voices[0].id).toBe("echo");
     expect(body.voices[0].provider).toBe("clone");
-    expect(body.voices[4].id).toBe("athena");
-    expect(body.voices[4].provider).toBe("workers_ai");
-    expect(body.default).toBe("athena");
+    expect(body.voices.every((v) => v.provider === "clone")).toBe(true);
+    expect(body.default).toBe("echo");
   });
 
   it("strips the configured mount prefix from incoming paths", async () => {

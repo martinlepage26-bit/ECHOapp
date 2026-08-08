@@ -2,12 +2,10 @@
 // Run `npx wrangler types` to refresh after binding changes.
 
 interface Env {
-  AI: Ai;
   ASSETS: Fetcher;
   DB: D1Database;
 
   // [vars]
-  ECHO_TTS_MODEL?: string;
   ECHO_MOUNT_PREFIX?: string;
   ECHO_RATE_LIMIT_WINDOW_MS?: string;
   ECHO_RATE_LIMIT_MAX?: string;

@@ -4,7 +4,8 @@
  * Responsibilities:
  *   - Serve the single-page UI from the [assets] binding.
  *   - Route /api/health, /api/voices, /api/sample-text (public).
- *   - Route /api/tts, /api/parse, /api/drafts (auth-gated when ECHO_API_KEY is set).
+ *   - Route /api/tts (clone voices only), /api/parse, /api/drafts (auth-gated when ECHO_API_KEY is set).
+ *   - System voices are synthesized client-side; the Worker only serves clone voices.
  */
 
 import { corsHeaders, json, noContent } from "./http.js";
@@ -12,7 +13,6 @@ import { authorize, authError } from "./auth.js";
 import { createDraft, deleteDraft, listDrafts, storageUnavailable } from "./storage.js";
 import { parseUploadedFile, ParseError, MAX_PARSE_BYTES } from "./parse.js";
 import {
-  DEFAULT_TTS_MODEL,
   MAX_TTS_CHARS,
   voiceCatalog,
   defaultVoiceId,
@@ -108,7 +108,6 @@ export default {
         {
           service: "echo",
           status: "online",
-          tts_model: (env.ECHO_TTS_MODEL || DEFAULT_TTS_MODEL).trim(),
           default_voice: defaultVoiceId(),
           voices: voiceCatalog().length,
           storage: env.DB ? "d1" : "unavailable",

@@ -1,6 +1,7 @@
 import { useCallback, useMemo, useRef, useState, type JSX } from "react";
 import { createDraft, fetchSampleText, parseFile, synthesize, type Voice } from "../api.js";
 import { playAudio, stopAudio, pauseAudio, resumeAudio } from "../audio.js";
+import { speakSystem, stopSystem, pauseSystem, resumeSystem } from "../system-speech.js";
 import { wordCount, charCount, formatDuration, renderWords } from "../text.js";
 
 interface Props {
@@ -33,12 +34,47 @@ export function Readback({
   const [fileName, setFileName] = useState<string>("No file selected yet.");
   const words = useMemo(() => renderWords(text), [text]);
   const outputRef = useRef<HTMLDivElement>(null);
+  const activeProvider = useRef<"system" | "clone" | null>(null);
+
+  const handleWord = useCallback((index: number) => {
+    setActiveWord(index);
+    if (index >= 0) {
+      const el = outputRef.current?.querySelector(`[data-word-index="${index}"]`);
+      el?.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+  }, []);
+
+  const handleEnded = useCallback(() => {
+    activeProvider.current = null;
+    setIsPlaying(false);
+    setIsPaused(false);
+    setActiveWord(-1);
+    setStatus("Ready");
+  }, []);
 
   const play = useCallback(async () => {
     if (!text.trim() || !selectedVoice) return;
     onError(null);
+
+    if (selectedVoice.provider === "system") {
+      try {
+        activeProvider.current = "system";
+        setStatus(`Playing · ${selectedVoice.name}`);
+        setIsPlaying(true);
+        setIsPaused(false);
+        speakSystem(text, selectedVoice.id, speed, handleWord, handleEnded);
+      } catch (e) {
+        activeProvider.current = null;
+        setStatus("Error");
+        onError(String((e as Error).message || e));
+        setIsPlaying(false);
+      }
+      return;
+    }
+
     setStatus("Synthesizing…");
     try {
+      activeProvider.current = "clone";
       const result = await synthesize(text, selectedVoice.id, speed);
       setStatus(`Playing · ${selectedVoice.name}`);
       setIsPlaying(true);
@@ -47,39 +83,41 @@ export function Readback({
         result.audio_base64,
         result.mime,
         result.words,
-        (index) => {
-          setActiveWord(index);
-          const el = outputRef.current?.querySelector(`[data-word-index="${index}"]`);
-          el?.scrollIntoView({ behavior: "smooth", block: "center" });
-        },
-        () => {
-          setIsPlaying(false);
-          setIsPaused(false);
-          setActiveWord(-1);
-          setStatus("Ready");
-        },
+        handleWord,
+        handleEnded,
       );
     } catch (e) {
+      activeProvider.current = null;
       setStatus("Error");
       onError(String((e as Error).message || e));
       setIsPlaying(false);
     }
-  }, [text, selectedVoice, speed, onError]);
+  }, [text, selectedVoice, speed, onError, handleWord, handleEnded]);
 
   const pause = () => {
-    pauseAudio();
+    if (activeProvider.current === "system") {
+      pauseSystem();
+    } else {
+      pauseAudio();
+    }
     setIsPaused(true);
     setStatus("Paused");
   };
 
   const resume = () => {
-    resumeAudio();
+    if (activeProvider.current === "system") {
+      resumeSystem();
+    } else {
+      resumeAudio();
+    }
     setIsPaused(false);
     setStatus("Playing");
   };
 
   const stop = () => {
     stopAudio();
+    stopSystem();
+    activeProvider.current = null;
     setIsPlaying(false);
     setIsPaused(false);
     setActiveWord(-1);

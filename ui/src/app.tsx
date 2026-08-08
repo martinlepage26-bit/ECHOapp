@@ -2,13 +2,13 @@ import { useEffect, useMemo, useState } from "react";
 import { Readback } from "./components/Readback.js";
 import { Library } from "./components/Library.js";
 import { VoiceSelect } from "./components/VoiceSelect.js";
-import { fetchVoices, type Voice, type Draft } from "./api.js";
-import { listDrafts } from "./api.js";
+import { fetchVoices, listDrafts, type Voice, type Draft } from "./api.js";
 import { stopAudio } from "./audio.js";
+import { ensureVoicesLoaded, getGoogleVoices, stopSystem } from "./system-speech.js";
 
 type Screen = "readback" | "library";
 
-const STORAGE_KEY = "echo:v2:state";
+const STORAGE_KEY = "echo:v3:state";
 
 interface PersistedState {
   text: string;
@@ -34,33 +34,53 @@ function savePersisted(state: PersistedState) {
   }
 }
 
+function pickDefaultVoice(voices: Voice[]): string {
+  // Prefer a Google English system voice if available, then fall back to the first clone voice.
+  const googleEn = voices.find((v) => v.provider === "system" && v.id === "Google US English");
+  if (googleEn) return googleEn.id;
+  const anySystem = voices.find((v) => v.provider === "system");
+  if (anySystem) return anySystem.id;
+  return voices[0]?.id || "";
+}
+
 export function App() {
   const [screen, setScreen] = useState<Screen>("readback");
   const [voices, setVoices] = useState<Voice[]>([]);
-  const [defaultVoice, setDefaultVoice] = useState<string>("athena");
-  const [selectedVoiceId, setSelectedVoiceId] = useState<string>("athena");
+  const [defaultVoice, setDefaultVoice] = useState<string>("");
+  const [selectedVoiceId, setSelectedVoiceId] = useState<string>("");
   const [text, setText] = useState<string>("");
   const [title, setTitle] = useState<string>("");
   const [speed, setSpeed] = useState<number>(1);
   const [drafts, setDrafts] = useState<Draft[]>([]);
   const [error, setError] = useState<string | null>(null);
 
-  // Load voices and persisted state on mount.
+  // Load clone voices from API and system voices from the browser.
   useEffect(() => {
-    fetchVoices()
-      .then((catalog) => {
-        setVoices(catalog.voices);
-        setDefaultVoice(catalog.default);
+    let cancelled = false;
+    Promise.all([
+      fetchVoices(),
+      ensureVoicesLoaded().then(getGoogleVoices).catch(() => []),
+    ])
+      .then(([catalog, systemVoices]) => {
+        if (cancelled) return;
+        const allVoices: Voice[] = [...systemVoices, ...catalog.voices];
+        const effectiveDefault = pickDefaultVoice(allVoices) || catalog.default;
         const persisted = loadPersisted();
-        const voiceId = persisted.voiceId && catalog.voices.some((v) => v.id === persisted.voiceId)
-          ? persisted.voiceId
-          : catalog.default;
+        const voiceId =
+          persisted.voiceId && allVoices.some((v) => v.id === persisted.voiceId)
+            ? persisted.voiceId
+            : effectiveDefault;
+        setVoices(allVoices);
+        setDefaultVoice(effectiveDefault);
         setSelectedVoiceId(voiceId);
         setText(persisted.text || "");
         setTitle(persisted.title || "");
         setSpeed(persisted.speed ?? 1);
       })
       .catch((e) => setError(String(e.message || e)));
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // Persist text/title/voice/speed changes.
@@ -91,6 +111,12 @@ export function App() {
     setScreen("readback");
   };
 
+  const switchScreen = (next: Screen) => {
+    setScreen(next);
+    stopAudio();
+    stopSystem();
+  };
+
   return (
     <div className="echo-main">
       <header className="echo-header">
@@ -101,16 +127,13 @@ export function App() {
           <nav className="echo-panel-actions">
             <button
               className={`echo-button ${screen === "readback" ? "primary" : "secondary"}`}
-              onClick={() => setScreen("readback")}
+              onClick={() => switchScreen("readback")}
             >
               Readback
             </button>
             <button
               className={`echo-button ${screen === "library" ? "primary" : "secondary"}`}
-              onClick={() => {
-                setScreen("library");
-                stopAudio();
-              }}
+              onClick={() => switchScreen("library")}
             >
               Library
             </button>
