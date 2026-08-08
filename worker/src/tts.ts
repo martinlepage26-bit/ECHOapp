@@ -140,8 +140,8 @@ export async function synthesize(
   speed: number,
 ): Promise<SynthesisResult> {
   const raw = String(voiceId || "").trim().toLowerCase();
-  const voice = VOICE_BY_ID.get(raw) || CLONE_VOICES[0];
-  if (!voice) throw new Error("No voices configured.");
+  const voice = VOICE_BY_ID.get(raw);
+  if (!voice) throw new Error(`Clone voice '${voiceId}' not found.`);
   return synthesizeClone(env, text, voice, speed);
 }
 
