@@ -1,27 +1,33 @@
 # ECHO architecture
 
-Radically simplified: one UI, one Worker, one database, two explicit TTS providers, no STT.
+Radically simplified: one UI, one Worker, one database, two TTS providers, no STT.
+
+- **System voices** — synthesized in the browser via the Web Speech API (Google voices).
+- **Clone voices** — synthesized by the local sidecar (SpeechT5 / OpenVoice).
 
 ## Stack
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │  Single web UI        ui/  →  Vite build  →  ui/dist        │
+│    System voices via window.speechSynthesis                 │
+│    Clone voices via /api/tts                                │
 └───────────────────────────┬─────────────────────────────────┘
                             │ [assets] binding
 ┌───────────────────────────▼─────────────────────────────────┐
 │  Cloudflare Worker    worker/src/index.ts                   │
 │    /api/health        status                                │
-│    /api/voices        catalog with explicit provider        │
+│    /api/voices        clone-voice catalog                   │
 │    /api/sample-text   static sample                         │
-│    /api/tts           Workers AI OR clone sidecar           │
+│    /api/tts           clone voices only                     │
 │    /api/parse         .txt/.md/.docx/.pdf                   │
 │    /api/drafts        D1 drafts only                        │
 └───────────────────────────┬─────────────────────────────────┘
-                            │ ECHO_CLONE_TTS_URL (for clone voices)
+                            │ ECHO_CLONE_TTS_URL
 ┌───────────────────────────▼─────────────────────────────────┐
 │  Local clone sidecar  clone/                                │
-│  SpeechT5 / OpenVoice for echo, patricia, martin-en, martin-fr
+│  SpeechT5 / OpenVoice for echo, patricia, martin-en,        │
+│  martin-fr                                                  │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -37,9 +43,11 @@ Radically simplified: one UI, one Worker, one database, two explicit TTS provide
 | Module | Inputs | Outputs |
 |--------|--------|---------|
 | `ui/src/api.ts` | endpoint + payload | JSON or binary |
+| `ui/src/system-speech.ts` | text + Google voice id + speed | spoken audio + word highlight callbacks |
 | `ui/src/audio.ts` | base64 audio + word timings | `<audio>` + highlight index |
+| `ui/src/timing.ts` | raw text | estimated word timings |
 | `ui/src/text.ts` | raw text | word count, duration estimate |
-| `worker/src/tts.ts` | `{text, voice_id, speed}` | audio bytes + metadata |
+| `worker/src/tts.ts` | `{text, voice_id, speed}` | audio bytes + metadata (clone voices only) |
 | `worker/src/parse.ts` | file bytes + filename | extracted text |
 | `worker/src/storage.ts` | D1 + draft payload | drafts CRUD |
 | `worker/src/auth.ts` | request + `ECHO_API_KEY` | 401 or pass |
