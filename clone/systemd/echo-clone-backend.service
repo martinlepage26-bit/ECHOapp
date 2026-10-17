@@ -1,0 +1,30 @@
+# ECHO clone TTS sidecar — systemd --user unit.
+#
+# Install / enable with:
+#   systemctl --user enable --now /home/martin/work/web-apps/ECHOapp/clone/systemd/echo-clone-backend.service
+# Or copy this file to ~/.config/systemd/user/ first.
+#
+# Status / logs:
+#   systemctl --user status echo-clone-backend.service
+#   journalctl --user -u echo-clone-backend.service -f
+
+[Unit]
+Description=ECHO SpeechT5 clone backend (uvicorn)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/work/web-apps/ECHOapp/clone
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=%h/.config/echo-clone/clone.env
+ExecStart=%h/work/web-apps/ECHOapp/clone/.venv/bin/uvicorn server:app --host 127.0.0.1 --port 8099 --log-level info
+# Pre-loading SpeechT5 + speaker encoder + embeddings + OpenVoice/MeloTTS
+# takes ~30-60 s on this host. Allow ample time before systemd decides the
+# service failed to start.
+TimeoutStartSec=300
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target
