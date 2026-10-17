@@ -46,9 +46,11 @@ npm run voice:local
 
 In the voice menu, choose **Connect PHAROS on this Mac**, then Play. This voice
 is English only; other languages retain their browser voices. Playback starts
-with a phrase of at most 24 characters, then prepares one next clip during
-playback. Subsequent clips are at most 48 characters, preferring punctuation
-and word boundaries. Uncached speech still needs local synthesis time; the
+with a phrase of at most 64 characters, then prepares at most two upcoming clips
+during playback. Subsequent clips are at most 80 characters, preferring punctuation
+and word boundaries. When measured synthesis time predicts a gap, the first
+phrase waits for up to two seconds of preparation ahead; cached replay skips
+that lead. Uncached speech still needs local synthesis time; the
 transport shows when it is preparing audio. Cached clips play without waiting
 for unrelated synthesis. Pause,
 resume, stop, speed and sentence navigation work with actual generated audio.
@@ -60,7 +62,25 @@ For a durable macOS installation after building, run `python3 companion/install.
 It installs a loopback-only user LaunchAgent and a Desktop **ECHO — PHAROS Voice**
 launcher. It preserves the previous release. To stop the companion without
 removing files: `launchctl bootout gui/$(id -u)/ca.govern.echo-reader`.
-PHAROS's existing voice service remains independent and unchanged.
+PHAROS's existing voice service remains the single model owner.
+
+On the verified Mac installation, `python3 companion/install_engine.py` enables
+the measured GPU execution profile on that same PHAROS LaunchAgent. It preserves
+the original server, model checkpoint, reference, generation settings and Python
+environment. A separate pinned PyTorch/torchaudio 2.8.0 environment reads the other
+dependencies from the original environment. FP32 inference uses one CPU thread,
+materializes constant weight normalization once, and decodes bounded GPU windows
+with context on both sides. No quantization or alternate voice is installed.
+The service warms its speech kernels before reporting ready.
+
+The installer checks the exact reviewed server and voice-reference digests,
+retains the original LaunchAgent, and restores its previous configuration if
+startup fails. Run `python3 companion/install_engine.py --restore` to restore
+the original execution path. Both commands preserve the original model files.
+See the [engine timing receipt](docs/reconciliation/pharos-engine-2026-10-17.json)
+for measured scope and limits. The final uncached browser run started in 5.95
+seconds, with gaps of 0.59 and 0.24 seconds; cached replay started in 0.03 seconds.
+Heavy concurrent memory/GPU use can still delay uncached speech.
 
 The hosted reader can use the same connection once this branch is deployed.
 It only contacts the companion after the reader selects Connect. Chrome may

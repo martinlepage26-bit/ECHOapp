@@ -1,4 +1,5 @@
 import http.client
+import hashlib
 import io
 import json
 import os
@@ -119,6 +120,18 @@ class CompanionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d, patch.object(server, 'VOICE_HOME', Path(d)):
             (Path(d) / 'reference.wav').write_bytes(b'wrong voice')
             with self.assertRaises(ValueError): server.voice_identity()
+
+    def test_cache_identity_changes_when_execution_profile_changes(self):
+        with tempfile.TemporaryDirectory() as d, patch.object(server, 'VOICE_HOME', Path(d)), \
+                patch.object(server, 'REFERENCE_SHA', hashlib.sha256(b'fixed reference').hexdigest()):
+            root = Path(d)
+            (root / 'reference.wav').write_bytes(b'fixed reference')
+            (root / 'server.py').write_bytes(b'fixed canonical server')
+            before = server.voice_identity()
+            (root / 'engine_profile.py').write_bytes(b'profile one')
+            first = server.voice_identity()
+            (root / 'engine_profile.py').write_bytes(b'profile two')
+            self.assertEqual(len({before, first, server.voice_identity()}), 3)
 
     def test_cache_uses_real_audio_and_sends_only_text_to_existing_service(self):
         audio = wav_bytes()

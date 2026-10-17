@@ -1,0 +1,133 @@
+{
+  "recorded_date": "2026-10-17",
+  "scope": "Mac-local ECHO/PHAROS engine and playback repair; neither hosted website was deployed.",
+  "selected_profile": {
+    "id": "echo-gpu-v1",
+    "profile_sha256": "56783e2ccb2d4d002421339ee12e24f75acd2ff22454d3e57952f57acc1b73d9",
+    "torch": "2.8.0",
+    "torchaudio": "2.8.0",
+    "tts": "0.22.0",
+    "precision": "FP32",
+    "cpu_threads": 1,
+    "device": "Apple MPS",
+    "window_frames": 192,
+    "context_frames": 32,
+    "changes": [
+      "Materialize constant vocoder weight normalization once before moving to MPS.",
+      "Decode bounded waveform windows on the GPU using the original global interpolation grid.",
+      "Warm speech kernels before reporting ready."
+    ],
+    "preserved": [
+      "Existing single PHAROS LaunchAgent and loopback port 8765.",
+      "XTTS-v2.0.3 checkpoint and pinned reference recording.",
+      "Original server source, request guards, generation settings and Python environment."
+    ],
+    "server_sha256": "0a72d10e91a485a44bcd1fc5911404ff38f5c352f13340ce8d21fdf5a1ae2966",
+    "reference_sha256": "1367bb796d941ec4cf8d221b7e971be27ab14966394faa8e254dc6fb4c67c67c",
+    "upstream_mps_issue": "https://github.com/pytorch/pytorch/issues/152278"
+  },
+  "engine_measurements": {
+    "original_after_image_render": {
+      "seconds": 13.22731925,
+      "audio_seconds": 4.032,
+      "rtf": 3.280585131448413,
+      "wav_sha256": "2935045246c96a31f482e1e6ce063e0b27ecc1a741b161477f27815dc741f003",
+      "render_running": false,
+      "seed": "uncontrolled",
+      "profile": "original installed MPS"
+    },
+    "selected_profile": [
+      {
+        "profile": "torch28-tiled-full-cold",
+        "threads": 1,
+        "seconds": 3.863441374967806,
+        "audio_seconds": 3.9466666666666668,
+        "real_time_factor": 0.9789125105492752,
+        "chunks": [],
+        "pcm_sha256": "1ac58bf6dd8e8aaa8fa70ff9e347b24b453b0649c045a8440dca49eca6724c96"
+      },
+      {
+        "profile": "torch28-tiled-full-warm",
+        "threads": 1,
+        "seconds": 3.7354462500079535,
+        "audio_seconds": 3.9466666666666668,
+        "real_time_factor": 0.9464813133466098,
+        "chunks": [],
+        "pcm_sha256": "1ac58bf6dd8e8aaa8fa70ff9e347b24b453b0649c045a8440dca49eca6724c96"
+      },
+      {
+        "profile": "torch28-tiled-unseen",
+        "threads": 1,
+        "seconds": 3.159541041997727,
+        "audio_seconds": 3.2,
+        "real_time_factor": 0.9873565756242897,
+        "chunks": [],
+        "pcm_sha256": "b1976b7197f895ee5b790ab6115fa733a7148e5ffade5df49ab6066ece76eedc"
+      }
+    ],
+    "selected_profile_method": "Synthetic English phrases; candidate runs use a fixed random seed of 26. Warm means kernels already exercised, not an audio-cache hit.",
+    "comparison_limit": "Diagnostic observations at different times under changing background load. The original run has an uncontrolled seed. These are not a controlled speedup estimate or a latency guarantee.",
+    "same_latent_vocoder_equivalence": {
+      "length": 94720,
+      "reference_length": 94720,
+      "max_abs_error": 0.0001017153263092041,
+      "rms_error": 4.401734258863144e-06,
+      "reference_rms": 0.13961301743984222
+    },
+    "equivalence_limit": "Numerical comparison on one 94720-sample waveform; does not establish subjective speech quality or eliminate model transcription errors."
+  },
+  "playback": {
+    "first_clip_max_chars": 64,
+    "subsequent_clip_max_chars": 80,
+    "upcoming_clips_max": 2,
+    "render_order": "sequential in reading order",
+    "initial_preparation_lead_max_seconds": 2,
+    "cached_replay_skips_lead": true,
+    "cache": "32 MiB in process memory; execution profile or LaunchAgent changes invalidate the voice identity.",
+    "browser": "Chrome on the Mac; actual AudioBufferSource start/ended events, no speech fixture.",
+    "speed": 1,
+    "synthetic_passage": "The morning light reaches the window as ECHO begins reading. Each paragraph should follow smoothly while the next phrase is prepared. You can pause for a moment and continue whenever you are ready.",
+    "uncached_click_to_first_audio_seconds": 5.9518,
+    "uncached_between_clip_gaps_seconds": [
+      0.586667,
+      0.24
+    ],
+    "cached_click_to_first_audio_seconds": 0.0299,
+    "pause_resume": "Paused during second phrase; no new audio source during the pause; resumed the remaining audio and completed the third phrase.",
+    "stop": "Stopped while preparing a new run; no subsequent audio source started before final observation and reload.",
+    "instrumentation_cleanup": "Temporary timing wrappers removed by page reload; DevTools Network observation disabled."
+  },
+  "verification": {
+    "node_tests": 55,
+    "python_companion_engine_installer_tests": 23,
+    "canonical_pharos_tests": 11,
+    "eslint": "pass",
+    "production_build": "pass",
+    "diff_whitespace": "pass",
+    "regressions": [
+      "Ordered bounded lookahead and initial buffering.",
+      "Cancellation, pause/resume, prefetch errors and cached access during another render.",
+      "Vocoder window coverage and missing model assets.",
+      "Cache invalidation for changed engine profile.",
+      "Installer rollback restores both entrypoint bytes and LaunchAgent; bounded retry for transient launchd registration error."
+    ],
+    "installed_profile_health": "status ok and exact profile SHA matched after final re-registration.",
+    "service_registration_note": "Final verification found the LaunchAgent absent after a successful installation receipt. Re-registered the same service, then verified live health and its running PID. Cause of the absent registration was not established; this is not a reboot or long-duration reliability test."
+  },
+  "installation_and_rollback": {
+    "reader": "http://127.0.0.1:8787/echo/",
+    "install": "python3 companion/install_engine.py",
+    "restore": "python3 companion/install_engine.py --restore",
+    "original_launchagent_backup": "~/.local/share/echo-voice/echo-performance-backup/original-launch-agent.plist",
+    "original_environment": "~/.local/share/echo-voice/.venv",
+    "selected_environment": "~/.local/share/echo-voice/.venv-torch28",
+    "audio_or_model_files_committed": false
+  },
+  "known_limits": [
+    "Uncached startup still takes seconds, and short gaps remain. The measured final playback is not pause-free.",
+    "Heavy concurrent GPU or memory pressure changes latency. The active image render was allowed to finish successfully; only its idle model cache was released afterward.",
+    "In-flight model inference may finish after Stop; stale browser audio is discarded.",
+    "The selected profile changes execution, not the voice identity or underlying model speech fidelity. Half precision, int8 quantization and experimental streaming were not promoted.",
+    "Mac-local installation verified; PR remains unmerged and neither hosted ECHO site was deployed."
+  ]
+}

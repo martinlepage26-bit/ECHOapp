@@ -3,9 +3,10 @@ export const PHAROS_VOICE = {
   id: 'pharos-echo', name: 'PHAROS · Echo', lang: 'en', local: true, pharos: true,
 };
 
-// Start with a short phrase, then use longer clips to retain natural phrasing.
-export const START_CLIP_CHARS = 24;
-export const CLIP_CHARS = 48;
+// Give the engine a natural phrase and enough playing time to prepare the next.
+// Tiny clips repeatedly pay the model's setup cost and create gaps.
+export const START_CLIP_CHARS = 64;
+export const CLIP_CHARS = 80;
 
 // Prefer phrase/word boundaries without dropping text or splitting surrogate pairs.
 export function packVoiceClips(text, limit = CLIP_CHARS, firstLimit = limit) {
@@ -68,8 +69,24 @@ async function renderClip(text, signal) {
   return response.arrayBuffer();
 }
 
+export function initialBufferDelay(renderSeconds, chars, nextChars, duration, rate) {
+  if (renderSeconds < 0.3 || !nextChars) return 0; // Cached replay needs no lead.
+  const shortage = renderSeconds * nextChars / chars - duration / rate;
+  return shortage > 0 ? Math.min(2, shortage + 0.15) : 0;
+}
+
+function waitForBuffer(milliseconds, signal) {
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) { reject(signal.reason); return; }
+    const stop = () => { clearTimeout(timer); reject(signal.reason); };
+    const timer = setTimeout(() => { signal.removeEventListener('abort', stop); resolve(); }, milliseconds);
+    signal.addEventListener('abort', stop, { once: true });
+  });
+}
+
 /** One browser audio owner. The companion reuses PHAROS's resident model. */
-export function createPharosPlayer({ render = renderClip, makeContext = () => new window.AudioContext() } = {}) {
+export function createPharosPlayer({ render = renderClip, makeContext = () => new window.AudioContext(),
+  now = () => performance.now(), wait = waitForBuffer } = {}) {
   let context, source, controller, release, paused = false, generation = 0;
   let callbacks, position = 0, total = 1, clipDuration = 0, clipStart = 0, rate = 1;
 
@@ -109,20 +126,37 @@ export function createPharosPlayer({ render = renderClip, makeContext = () => ne
           }
         }
         const clips = reading();
+        let renderTail = Promise.resolve();
         function prepare() {
           const { value: clip, done } = clips.next();
           if (done) return null;
           // Settle failures immediately, including when Stop discards a prefetch.
-          // At most one next clip is prepared; never enqueue the whole document.
+          // The playback loop bounds lookahead to two clips.
+          const previous = renderTail;
           const result = (async () => {
+            const earlier = await previous;
+            if (earlier?.error) return earlier;
             if (run !== generation) return {};
+            const startedAt = now();
             const bytes = await render(clip.text, signal);
             if (run !== generation) return {};
-            return { buffer: await context.decodeAudioData(bytes) };
+            const renderSeconds = (now() - startedAt) / 1000;
+            return { buffer: await context.decodeAudioData(bytes), renderSeconds };
           })().catch((error) => ({ error }));
+          // Two buffered clips must still enter the model in reading order.
+          renderTail = result;
           return { clip, result };
         }
         let pending = prepare(), sentenceIndex = -1;
+        const upcoming = [];
+        let started = false;
+        function fillUpcoming() {
+          while (upcoming.length < 2) {
+            const next = prepare();
+            if (!next) break;
+            upcoming.push(next);
+          }
+        }
         while (pending) {
           const { clip, result } = pending;
           if (run !== generation) return;
@@ -131,11 +165,21 @@ export function createPharosPlayer({ render = renderClip, makeContext = () => ne
             sentenceIndex = clip.sentence; cb.onSentence(sentenceIndex);
           }
           cb.onStatus(paused ? 'paused' : 'buffering');
-          const { buffer, error } = await result;
+          const { buffer, error, renderSeconds } = await result;
           if (run !== generation) return;
           if (error) throw error;
           if (paused) await new Promise((resolve) => { release = resolve; });
           if (run !== generation) return;
+          if (!started) {
+            fillUpcoming();
+            const lead = initialBufferDelay(renderSeconds, Array.from(clip.text).length,
+              Array.from(upcoming[0]?.clip.text || '').length, buffer.duration, settings.current.rate);
+            if (lead) await wait(lead * 1000, signal);
+            if (run !== generation) return;
+            if (paused) await new Promise((resolve) => { release = resolve; });
+            if (run !== generation) return;
+            started = true;
+          }
           source = context.createBufferSource();
           source.buffer = buffer;
           rate = settings.current.rate;
@@ -145,7 +189,10 @@ export function createPharosPlayer({ render = renderClip, makeContext = () => ne
           const ended = new Promise((resolve) => { release = resolve; source.onended = resolve; });
           cb.onStatus('playing');
           source.start();
-          pending = prepare();
+          // Bank a little audio when synthesis is faster than playback. The
+          // companion serializes model work, and Stop aborts both requests.
+          fillUpcoming();
+          pending = upcoming.shift();
           await ended;
           if (run !== generation) return;
           source.disconnect(); source = null; release = null;

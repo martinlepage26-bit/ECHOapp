@@ -41,7 +41,13 @@ HTTP = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect()
 def voice_identity():
     if hashlib.sha256((VOICE_HOME / "reference.wav").read_bytes()).hexdigest() != REFERENCE_SHA:
         raise ValueError("PHAROS’s pinned voice reference has changed.")
-    return hashlib.sha256((VOICE_HOME / "server.py").read_bytes()).hexdigest()
+    identity = hashlib.sha256((VOICE_HOME / "server.py").read_bytes())
+    # Installing/restoring an execution profile must invalidate old audio too.
+    for path in (VOICE_HOME / 'engine_profile.py',
+                 Path.home() / 'Library/LaunchAgents/com.pharos.echosay-server.plist'):
+        if path.is_file():
+            identity.update(path.read_bytes())
+    return identity.hexdigest()
 
 
 def health():
