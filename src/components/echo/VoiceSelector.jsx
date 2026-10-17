@@ -14,7 +14,7 @@ function group(voices) {
   return byLang;
 }
 
-export default function VoiceSelector({ voices, selectedVoiceId, selectedVoice, onSelect, preferredLang }) {
+export default function VoiceSelector({ voices, selectedVoiceId, selectedVoice, onSelect, preferredLang, pharosStatus, onConnectPharos }) {
   const [query, setQuery] = useState('');
 
   const groups = useMemo(() => {
@@ -53,6 +53,14 @@ export default function VoiceSelector({ voices, selectedVoiceId, selectedVoice, 
         </Button>
       )}
     >
+      <div className="px-2 py-2">
+        <Button variant="outline" size="sm" className="w-full" onClick={onConnectPharos}
+          disabled={pharosStatus === 'connecting'}>
+          {pharosStatus === 'connecting' ? 'Connecting…' : pharosStatus === 'ready' ? 'Use PHAROS · Echo' : 'Connect PHAROS on this Mac'}
+        </Button>
+        <p className="mt-1.5 text-xs text-muted-foreground">PHAROS’s English voice. Text stays on this Mac.</p>
+      </div>
+      <MenuSeparator />
       {voices.length > 8 && (
         <div className="sticky top-0 z-10 -mx-1.5 -mt-1.5 mb-1 bg-popover/95 px-2.5 pb-2 pt-2.5 backdrop-blur-xl">
           <div className="relative">

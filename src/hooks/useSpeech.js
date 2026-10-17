@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { splitSentences, countWords } from '@/lib/sentences';
 import { verbalizeSentence, SUPPORTED } from '@/lib/verbalize';
 import { detectLanguage } from '@/lib/language';
+import { PHAROS_VOICE, connectPharos, createPharosPlayer } from '@/lib/pharosVoice';
 
 export const SAMPLE_TEXT = `Invoice #INV-2026-0042 totals $12,480.75, due 2026-09-30.
 
@@ -31,7 +32,11 @@ export function useSpeech() {
   const [decipher, setDecipher] = useState(true);
   const [subProgress, setSubProgress] = useState(0);
   const [error, setError] = useState(null);
-  const [supported, setSupported] = useState(true);
+  const [browserSupported, setSupported] = useState(true);
+  const [pharosStatus, setPharosStatus] = useState('disconnected');
+  const supported = browserSupported || pharosStatus === 'ready';
+  const pharosRef = useRef(null);
+  if (!pharosRef.current) pharosRef.current = createPharosPlayer();
 
   const genRef = useRef(0);
   const startedAtRef = useRef(0);
@@ -91,14 +96,14 @@ export function useSpeech() {
   }, []);
 
   const voices = useMemo(
-    () => systemVoices.map((v, i) => ({
+    () => [...(pharosStatus === 'ready' || selectedVoiceId === PHAROS_VOICE.id ? [PHAROS_VOICE] : []), ...systemVoices.map((v, i) => ({
       id: `${v.voiceURI || v.name}::${i}`,
       name: v.name,
       lang: v.lang,
       local: v.localService,
       _voice: v,
-    })),
-    [systemVoices],
+    }))],
+    [systemVoices, pharosStatus, selectedVoiceId],
   );
 
   // Follow the document's language unless the reader has chosen a voice.
@@ -107,9 +112,9 @@ export function useSpeech() {
     if (pickedRef.current || voices.length === 0) return;
     const prefix = langCode.toLowerCase();
     const match =
-      voices.find((v) => v.local && (v.lang || '').toLowerCase().startsWith(prefix)) ||
-      voices.find((v) => (v.lang || '').toLowerCase().startsWith(prefix)) ||
-      voices.find((v) => v.local) ||
+      voices.find((v) => !v.pharos && v.local && (v.lang || '').toLowerCase().startsWith(prefix)) ||
+      voices.find((v) => !v.pharos && (v.lang || '').toLowerCase().startsWith(prefix)) ||
+      voices.find((v) => !v.pharos && v.local) ||
       voices[0];
     if (match) setSelectedVoiceId(match.id);
   }, [voices, langCode]);
@@ -121,6 +126,20 @@ export function useSpeech() {
     setSelectedVoiceId(id);
   }, []);
 
+  const connectLocalVoice = useCallback(async () => {
+    setPharosStatus('connecting');
+    setError(null);
+    try {
+      await connectPharos();
+      pickedRef.current = true;
+      setPharosStatus('ready');
+      setSelectedVoiceId(PHAROS_VOICE.id);
+    } catch (error) {
+      setPharosStatus('disconnected');
+      setError(error.message);
+    }
+  }, []);
+
   /* ── Playback ─────────────────────────────────────────────────────── */
 
   const estimatedSeconds = useMemo(
@@ -130,12 +149,14 @@ export function useSpeech() {
 
   const hardStop = useCallback(() => {
     genRef.current++;
+    pharosRef.current.cancel();
     if (typeof window !== 'undefined' && window.speechSynthesis) {
       window.speechSynthesis.cancel();
     }
   }, []);
 
   const stop = useCallback(() => {
+    pendingPlayRef.current = false;
     hardStop();
     indexRef.current = -1;
     resumeIndexRef.current = 0;
@@ -150,7 +171,31 @@ export function useSpeech() {
   settingsRef.current = { rate, selectedVoice, sentences, spokenFor, langCode };
 
   const speakFrom = useCallback((startIndex) => {
-    const gen = ++genRef.current;
+    hardStop();
+    const gen = genRef.current;
+    if (settingsRef.current.selectedVoice?.pharos) {
+      setError(null);
+      if (settingsRef.current.langCode !== 'en') {
+        setError('PHAROS’s current voice is English only. Choose a browser voice for this language.');
+        setStatus('idle');
+        return;
+      }
+      pharosRef.current.start(startIndex, settingsRef, {
+        onSentence(i) {
+          if (gen !== genRef.current) return;
+          indexRef.current = i; resumeIndexRef.current = i;
+          setCurrentIndex(i); setSubProgress(0);
+        },
+        onStatus(value) { if (gen === genRef.current) setStatus(value); },
+        onError(message) { if (gen === genRef.current) { setError(message); setStatus('idle'); } },
+        onEnd() {
+          if (gen !== genRef.current) return;
+          indexRef.current = -1; resumeIndexRef.current = 0;
+          setCurrentIndex(-1); setSubProgress(0); setStatus('idle');
+        },
+      });
+      return;
+    }
     const run = (i) => {
       const { sentences: list, selectedVoice: voice, rate: r, spokenFor: say, langCode: lc } = settingsRef.current;
       if (gen !== genRef.current) return;
@@ -210,7 +255,7 @@ export function useSpeech() {
     // the utterance outright, so yield once before starting.
     window.speechSynthesis.cancel();
     setTimeout(() => run(startIndex), 20);
-  }, []);
+  }, [hardStop]);
 
   const play = useCallback(() => {
     if (!supported) {
@@ -227,20 +272,22 @@ export function useSpeech() {
     if (sentences.length === 0) return;
 
     if (status === 'paused') {
+      if (selectedVoice?.pharos) { pharosRef.current.resume(); return; }
       window.speechSynthesis.resume();
       startedAtRef.current = Date.now() - subProgress * expectedMsRef.current;
       setStatus('playing');
       return;
     }
-    if (status === 'playing') return;
+    if (status === 'playing' || status === 'buffering') return;
     speakFrom(Math.max(0, Math.min(resumeIndexRef.current, sentences.length - 1)));
-  }, [supported, text, analysisText, sentences.length, status, subProgress, speakFrom]);
+  }, [supported, text, analysisText, sentences.length, status, subProgress, speakFrom, selectedVoice]);
 
   const pause = useCallback(() => {
-    if (status !== 'playing') return;
+    if (!['playing', 'buffering'].includes(status)) return;
+    if (selectedVoice?.pharos) { pharosRef.current.pause(); return; }
     window.speechSynthesis.pause();
     setStatus('paused');
-  }, [status]);
+  }, [status, selectedVoice]);
 
   const seekTo = useCallback((i) => {
     if (i < 0 || i >= sentences.length) return;
@@ -269,7 +316,7 @@ export function useSpeech() {
   useEffect(() => {
     const changed = rateRef.current !== rate;
     rateRef.current = rate;
-    if (changed && status === 'playing' && indexRef.current >= 0) speakFrom(indexRef.current);
+    if (changed && ['playing', 'buffering'].includes(status) && indexRef.current >= 0) speakFrom(indexRef.current);
   }, [rate, status, speakFrom]);
 
   // Same for a voice change while reading.
@@ -277,14 +324,16 @@ export function useSpeech() {
   useEffect(() => {
     const changed = voiceRef.current !== selectedVoiceId;
     voiceRef.current = selectedVoiceId;
-    if (changed && status === 'playing' && indexRef.current >= 0) speakFrom(indexRef.current);
-  }, [selectedVoiceId, status, speakFrom]);
+    if (changed && status === 'paused') stop();
+    if (changed && ['playing', 'buffering'].includes(status) && indexRef.current >= 0) speakFrom(indexRef.current);
+  }, [selectedVoiceId, status, speakFrom, stop]);
 
   /* ── Progress ticker and stall watchdog ───────────────────────────── */
 
   useEffect(() => {
     if (status !== 'playing') return undefined;
     const id = setInterval(() => {
+      if (selectedVoice?.pharos) { setSubProgress(pharosRef.current.progress()); return; }
       const elapsed = Date.now() - startedAtRef.current;
       const expected = expectedMsRef.current || 1;
       setSubProgress(Math.min(elapsed / expected, 1));
@@ -306,9 +355,10 @@ export function useSpeech() {
       }
     }, 250);
     return () => clearInterval(id);
-  }, [status, speakFrom, stop]);
+  }, [status, speakFrom, stop, selectedVoice]);
 
   useEffect(() => () => {
+    pharosRef.current.dispose();
     if (typeof window !== 'undefined' && window.speechSynthesis) window.speechSynthesis.cancel();
   }, []);
 
@@ -345,6 +395,7 @@ export function useSpeech() {
     sentences, wordCount, estimatedSeconds,
     status, currentIndex, progress, error, supported,
     voices, selectedVoiceId, selectedVoice, setSelectedVoiceId: chooseVoice,
+    pharosStatus, connectLocalVoice,
     rate, setRate,
     decipher, setDecipher, decipherAvailable,
     detectedLanguage: detected,

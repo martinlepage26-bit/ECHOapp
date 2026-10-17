@@ -1,6 +1,6 @@
 # ECHO — read aloud, read along
 
-ECHO reads pasted text, local documents and public web pages with the voices available in the browser. It highlights and seeks by sentence, with optional English/French pronunciation of amounts, dates and serial numbers.
+ECHO reads pasted text, local documents and public web pages with browser voices or the existing PHAROS Agent voice on this Mac. It highlights and seeks by sentence, with optional English/French pronunciation of amounts, dates and serial numbers.
 
 - Live reader: https://martin.govern-ai.ca/echo/
 - Source: https://github.com/martinlepage26-bit/ECHOapp
@@ -14,7 +14,7 @@ Use Node 22 (`.nvmrc`) and the committed lockfile.
 ```sh
 npm ci
 npm run dev        # Vite UI at /echo/; URL extraction needs the Worker
-npm run check      # ESLint + Node tests
+npm run check      # ESLint + Node and Python companion tests
 npm run build      # production assets in dist/
 npx wrangler dev   # after build: UI plus the URL-extraction Worker
 ```
@@ -32,11 +32,43 @@ npx wrangler dev   # after build: UI plus the URL-extraction Worker
 
 Space plays/pauses, Escape stops, and arrow keys navigate sentences when focus is outside an interactive control or dialog.
 
+## PHAROS voice on this Mac
+
+PHAROS already runs the pinned Echo XTTS-v2 voice at `127.0.0.1:8765`.
+ECHO's small companion reuses that resident service. It does not load another
+model, change the voice, or upload the voice reference.
+
+```sh
+npm run build
+npm run voice:local
+# Open http://127.0.0.1:8787/echo/
+```
+
+In the voice menu, choose **Connect PHAROS on this Mac**, then Play. This voice
+is English only; other languages retain their browser voices. The first clip
+needs local synthesis time; the transport shows rendering progress. Pause,
+resume, stop, speed and sentence navigation work with actual generated audio.
+Stopping discards unfinished results; already-started model inference may
+finish in the background. No fallback voice is substituted after an error.
+
+For a durable macOS installation after building, run `python3 companion/install.py`.
+It installs a loopback-only user LaunchAgent and a Desktop **ECHO — PHAROS Voice**
+launcher. It preserves the previous release. To stop the companion without
+removing files: `launchctl bootout gui/$(id -u)/ca.govern.echo-reader`.
+PHAROS's existing voice service remains independent and unchanged.
+
+The hosted reader can use the same connection once this branch is deployed.
+It only contacts the companion after the reader selects Connect. Chrome may
+ask for local/loopback network access; allow it only for your ECHO page. The
+local reader works at the companion's own origin without that cross-origin
+permission. Browser restrictions are not disabled. See [Chrome's local network
+access guidance](https://developer.chrome.com/blog/local-network-access).
+
 ## Data handling
 
-Local document parsing and saved drafts stay in the browser. Voices labelled **on device** report `localService=true`; other browser voices may use their provider's online service. URL import sends the requested URL to this app's Worker, which fetches the remote page. Do not assume that every browser voice is offline.
+Local document parsing and saved drafts stay in the browser. Browser voices labelled **on device** report `localService=true`; other browser voices may use their provider's online service. URL import sends the requested URL to this app's Worker, which fetches the remote page. Do not assume that every browser voice is offline.
 
-The Base44 cloud voices and cloud drafts remain available on the original Base44 app. They are not silently mapped to browser voices or migrated here. No Base44 SDK, API key, D1 database, voice reference recording or clone sidecar is needed for this reader.
+The Base44 cloud voices and cloud drafts remain available on the original Base44 app. They are not silently mapped to browser voices or migrated here. No Base44 SDK, API key or D1 database is needed. PHAROS mode sends short text clips only to the companion on this Mac. Audio is cached in bounded process memory (32 MiB) and clears when the companion restarts; browser audio buffers are released during playback. Temporary render files are validated and removed. No voice recording or generated speech is committed to GitHub. The existing XTTS installation and its licensing remain unchanged.
 
 ## Source reconciliation
 

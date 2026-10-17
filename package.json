@@ -10,7 +10,9 @@
     "test": "node --test test/*.test.js",
     "deploy": "npm run build && wrangler deploy",
     "lint": "eslint src worker test",
-    "check": "npm run lint && npm test"
+    "check": "npm run lint && npm test && npm run test:companion",
+    "test:companion": "python3 -m unittest discover -s companion -p 'test_*.py'",
+    "voice:local": "python3 companion/server.py"
   },
   "dependencies": {
     "framer-motion": "^11.11.17",

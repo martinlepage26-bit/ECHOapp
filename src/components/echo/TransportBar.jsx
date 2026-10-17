@@ -15,7 +15,7 @@ export default function TransportBar({
   decipher, onToggleDecipher, decipherAvailable,
   onPlay, onPause, onStop, onSkip, onSample, onImport, onFetchUrl, onSave, importing,
 }) {
-  const isPlaying = status === 'playing';
+  const isPlaying = status === 'playing' || status === 'buffering';
   const isIdle = status === 'idle';
   const canPlay = sentenceCount > 0;
 
@@ -31,7 +31,7 @@ export default function TransportBar({
                      shadow-lg shadow-lilac/30 transition-all duration-200
                      hover:scale-105 hover:shadow-xl hover:shadow-lilac/40 active:scale-95"
         >
-          {isPlaying ? <Pause className="h-6 w-6" /> : <Play className="ml-0.5 h-6 w-6" />}
+          {status === 'buffering' ? <Loader2 className="h-6 w-6 animate-spin" /> : isPlaying ? <Pause className="h-6 w-6" /> : <Play className="ml-0.5 h-6 w-6" />}
         </Button>
 
         <div className="flex shrink-0 items-center gap-1">
@@ -76,6 +76,8 @@ export default function TransportBar({
             : `${Math.min(currentIndex + 1, sentenceCount)} / ${sentenceCount} sentences`}
         </span>
       </div>
+
+      {status === 'buffering' && <p role="status" className="text-center text-xs text-muted-foreground">Rendering PHAROS’s voice on this Mac…</p>}
 
       {/* One scrolling row on a phone: wrapping pushed the reading pane
           down to almost nothing on a 320px screen. */}

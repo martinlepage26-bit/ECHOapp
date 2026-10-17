@@ -39,7 +39,7 @@ export default function Home() {
         e.target.closest?.('input, textarea, button, select, a, [role="button"], [role="menu"], [role="dialog"], [contenteditable="true"]')) return;
     if (e.code === 'Space') {
       e.preventDefault();
-      if (speech.status === 'playing') speech.pause(); else speech.play();
+      if (['playing', 'buffering'].includes(speech.status)) speech.pause(); else speech.play();
     } else if (e.code === 'Escape') {
       speech.stop();
     } else if (e.code === 'ArrowRight') {
@@ -161,6 +161,8 @@ export default function Home() {
             selectedVoice={speech.selectedVoice}
             onSelect={speech.setSelectedVoiceId}
             preferredLang={speech.detectedLanguage?.code}
+            pharosStatus={speech.pharosStatus}
+            onConnectPharos={speech.connectLocalVoice}
           />
           {speech.detectedLanguage && (
             <span className="inline-flex items-center gap-1 rounded-full border border-lilac/20

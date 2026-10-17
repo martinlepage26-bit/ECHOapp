@@ -1,0 +1,38 @@
+{
+  "as_of": "2026-10-17T14:27:10.491068+00:00",
+  "scope": "Mac-local PHAROS voice integration; hosted app not deployed",
+  "voice": {
+    "engine": "existing PHAROS Echo XTTS-v2",
+    "language": "en",
+    "reference_sha256": "1367bb796d941ec4cf8d221b7e971be27ab14966394faa8e254dc6fb4c67c67c",
+    "service_source_sha256": "0a72d10e91a485a44bcd1fc5911404ff38f5c352f13340ce8d21fdf5a1ae2966",
+    "existing_service": "http://127.0.0.1:8765",
+    "companion": "http://127.0.0.1:8787",
+    "reference_copied": false,
+    "model_started": false
+  },
+  "checks": {
+    "node_tests": 48,
+    "python_tests": 12,
+    "lint": "passed",
+    "build": "passed",
+    "installed_launch_agent": "running, loopback only",
+    "url_import": "example.com succeeded",
+    "actual_render": {
+      "duration_seconds": 2.965333333333333,
+      "sample_rate": 24000,
+      "channels": 1,
+      "bytes": 142380,
+      "sha256": "4fed3c1c969ede1c2c2a56b43b785049f533b15f676d58cf579a4765a0e2ab67",
+      "render_seconds": 25.88
+    },
+    "offline_transcript": "Hello Martin, this is Pharoos speaking in Echo.",
+    "browser_playback": "unverified: Chrome automated navigation returned ERR_BLOCKED_BY_CLIENT. User asked to check the exact URL manually."
+  },
+  "limitations": [
+    "English only, preserving PHAROS inference settings.",
+    "Browser pause/resume/cancel logic has controlled AudioContext unit coverage; audible browser output remains unverified.",
+    "Existing PHAROS model rendering may finish after a reader cancels; its output is not played.",
+    "No public tunnel, new voice model, provider credentials or live website deployment."
+  ]
+}
