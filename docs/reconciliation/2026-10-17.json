@@ -1,0 +1,188 @@
+{
+  "schema_version": "echo.reconciliation.v1",
+  "project": "echo",
+  "doc": "base44-governed-reconciliation",
+  "as_of": "2026-10-17T14:00:29.872038Z",
+  "title": "ECHO: Base44 and governed reader reconciliation",
+  "request": "diff https://solid-echo-read-flow.base44.app/ and https://martin.govern-ai.ca/echo/, then reconcile in to github",
+  "repository": "https://github.com/martinlepage26-bit/ECHOapp",
+  "branch": "reconcile/live-reader-20261017",
+  "source_commit": "7d5be63e191620a0f10d8538354642c0325844b6",
+  "source_tree": "1a2c522acdd757ee4c18a0a0b37cd25a67fa7451",
+  "previous_github_commit": "025070022c913a18dc18e996538c8b20fd03919d",
+  "base44_bundle_sha256": "b76a3f08e55f20893e57515bef7e322f89aba12b59b4cf3418745a43710d93e1",
+  "sources": [
+    {
+      "name": "Base44 live app",
+      "url": "https://solid-echo-read-flow.base44.app/",
+      "method": "Direct Chrome UI and public JavaScript bundle"
+    },
+    {
+      "name": "Governed live app",
+      "url": "https://martin.govern-ai.ca/echo/",
+      "method": "Direct Chrome UI and SHA-256 of all six production files"
+    },
+    {
+      "name": "Stable source",
+      "method": "Read-only archive of CT920 Git commit; original working tree untouched"
+    }
+  ],
+  "features": [
+    {
+      "feature": "Interface",
+      "base44": "Compact full-screen teal/lilac reader.",
+      "governed": "Same visual family, with a persistent transport and PHAROS link.",
+      "resolution": "Preserve the governed design; restore a visible Drafts close button."
+    },
+    {
+      "feature": "Voices",
+      "base44": "Five Base44 premium voices (River, Honey, Sunny, Storm, Spark), plus a system list capped at 60 displayed entries.",
+      "governed": "All browser voices, searchable and grouped by language; local-service voices marked on device.",
+      "resolution": "Keep the browser catalog and explicit provider distinction. Premium Base44 voices remain a separate service."
+    },
+    {
+      "feature": "Read-along",
+      "base44": "System speech queues one utterance per word; cloud highlighting estimates word positions from audio duration.",
+      "governed": "One sentence at a time; sentence highlighting, click-to-seek, previous/next and follow scrolling.",
+      "resolution": "Retain sentence tracking, compatible with spoken number substitutions."
+    },
+    {
+      "feature": "Long text",
+      "base44": "Cloud GenerateSpeech sends text.slice(0,5000); the visible document can exceed what is spoken.",
+      "governed": "No 5,000-character cut; long unpunctuated sentences split into bounded utterances.",
+      "resolution": "Retain the governed text path; 10,000-word import and segmentation verified."
+    },
+    {
+      "feature": "Numbers and language",
+      "base44": "Language badge; no number-pronunciation layer.",
+      "governed": "English/French amounts, dates, ranges, serials and other number forms; other languages pass through.",
+      "resolution": "Keep the governed decipher toggle and language-aware voice suggestion."
+    },
+    {
+      "feature": "File import",
+      "base44": "TXT/MD read locally; DOCX/PDF uploaded to Base44 for extraction; 10 MB input limit.",
+      "governed": "Local text/Markdown/CSV/JSON/log/RTF/HTML/XML/DOCX/EPUB/PDF extraction; 25 MB input limit.",
+      "resolution": "Keep in-browser imports. TXT, DOCX, EPUB and text PDF fixtures verified."
+    },
+    {
+      "feature": "URL import",
+      "base44": "No URL import control in the inspected live Base44 app.",
+      "governed": "Same-origin Worker /echo/api/extract with redirect, literal-host and size checks.",
+      "resolution": "Preserve first-party extraction; example.com fetched in the local Worker and UI."
+    },
+    {
+      "feature": "Drafts",
+      "base44": "Base44 Draft entity, listing the newest 100; requires the platform backend.",
+      "governed": "Up to 50 drafts in localStorage, searchable and reloadable in that browser.",
+      "resolution": "Keep local drafts. Existing Base44 drafts are not copied or synchronized."
+    },
+    {
+      "feature": "Keyboard and mobile",
+      "base44": "Space/Escape shortcuts exclude standard form controls; sheet includes a close affordance.",
+      "governed": "Adds arrow navigation, but Space on buttons hijacked their action; 320px voice menu extended to x=328.",
+      "resolution": "Respect focused controls and dialogs; constrain menu to x=8..312 at 320px; add Close Drafts."
+    },
+    {
+      "feature": "Runtime/source",
+      "base44": "Base44 platform hosting and SDK.",
+      "governed": "Live reader is a separate Worker; stable source was absent from GitHub.",
+      "resolution": "Import CT920 stable commit 7d5be63 into ECHOapp, replace older active stack, retain its Git history."
+    },
+    {
+      "feature": "Cloud cloning and dictation",
+      "base44": "Base44 premium speech is present; no dictation control observed in the current UI.",
+      "governed": "Uncommitted CT920 cloud-voice experiment exists; no clone or dictation controls in the verified stable live build.",
+      "resolution": "Leave unfinished work untouched. Present-release scope only; no permanent product exclusion and no provider setup."
+    }
+  ],
+  "verification": [
+    {
+      "id": "source_provenance",
+      "status": "PASS",
+      "detail": "All six baseline build files match the live governed site by SHA-256."
+    },
+    {
+      "id": "lint",
+      "status": "PASS",
+      "detail": "npm run lint"
+    },
+    {
+      "id": "unit_tests",
+      "status": "PASS",
+      "detail": "42/42 Node tests: 36 recovered segmentation/pronunciation tests and six Worker-route tests."
+    },
+    {
+      "id": "build",
+      "status": "PASS",
+      "detail": "npm run build; production Vite assets built successfully."
+    },
+    {
+      "id": "imports",
+      "status": "PASS",
+      "detail": "TXT, DOCX, EPUB and text PDF imported and exact expected text observed after completion."
+    },
+    {
+      "id": "long_text",
+      "status": "PASS",
+      "detail": "10,000-word file imported intact; existing segmentation test passes."
+    },
+    {
+      "id": "url",
+      "status": "PASS",
+      "detail": "Local Worker and browser URL import return the public Example Domain text."
+    },
+    {
+      "id": "drafts",
+      "status": "PASS",
+      "detail": "Sample saved locally and found again after reload; Close Drafts dismisses the sheet."
+    },
+    {
+      "id": "language",
+      "status": "PASS",
+      "detail": "French text selects Amelie fr-CA; English sample selects English again."
+    },
+    {
+      "id": "keyboard",
+      "status": "PASS",
+      "detail": "Space on Sample keeps playback idle after fix; before fix it started playback."
+    },
+    {
+      "id": "responsive",
+      "status": "PASS",
+      "detail": "Voice menu is 304px wide inside a 320px viewport. No document overflow at 390px and 1470px."
+    },
+    {
+      "id": "playback_state",
+      "status": "PASS_WITH_FIXTURE",
+      "detail": "Play/pause, next sentence, resume and stop verified with controlled speech events on a 10,000-word document. Fixture removed by reload."
+    },
+    {
+      "id": "native_audio",
+      "status": "NOT_VERIFIED",
+      "detail": "Native browser speech emitted five end events within about 0.22 seconds without start events in this automation session. Audible output and natural timing were not acoustically verified."
+    },
+    {
+      "id": "provider_cloud",
+      "status": "NOT_TESTED",
+      "detail": "No premium synthesis request, upload, account change or spend was performed."
+    },
+    {
+      "id": "deployment",
+      "status": "NOT_PERFORMED",
+      "detail": "Source reconciliation only. Neither live app was modified."
+    }
+  ],
+  "limits": [
+    "This reconciles the current reader into GitHub. It does not merge or deploy automatically.",
+    "Base44 account data, paid voices and unfinished cloud cloning were not migrated.",
+    "Browser online voices may send text to the browser voice provider. Only voices marked on device report localService=true.",
+    "Worker guard tests cover route and literal-address behavior, not a complete DNS or security audit.",
+    "The stale cached search result showed an older dictation console; direct live inspection supersedes it."
+  ],
+  "changes": [
+    "Recovered the exact live stable source and build configuration.",
+    "Replaced the obsolete active UI/Worker/clone stack; earlier source and recordings remain in Git history.",
+    "Restored focused-control keyboard behavior and mobile Drafts dismissal; fixed voice menu clipping.",
+    "Added CI validation, six Worker tests and reproducible comparison evidence."
+  ]
+}

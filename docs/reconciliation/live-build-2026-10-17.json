@@ -1,0 +1,54 @@
+{
+  "as_of": "2026-10-17T13:49:27.568191+00:00",
+  "source_commit": "7d5be63e191620a0f10d8538354642c0325844b6",
+  "assets": [
+    {
+      "path": "assets/index-DuFIXpeZ.js",
+      "url": "https://martin.govern-ai.ca/echo/assets/index-DuFIXpeZ.js",
+      "sha256": "721b85b507cec7fa9d66bf05c58c557e32f0f8c80fe4325a8cd37ab7f09dce82",
+      "build_sha256": "721b85b507cec7fa9d66bf05c58c557e32f0f8c80fe4325a8cd37ab7f09dce82",
+      "matches": true,
+      "bytes": 75461
+    },
+    {
+      "path": "assets/index-ghUwKo8b.css",
+      "url": "https://martin.govern-ai.ca/echo/assets/index-ghUwKo8b.css",
+      "sha256": "d95fa232297cf3c40c2d039edaa1b10ef1a810eff4dcb498a0af2fdda325c96a",
+      "build_sha256": "d95fa232297cf3c40c2d039edaa1b10ef1a810eff4dcb498a0af2fdda325c96a",
+      "matches": true,
+      "bytes": 30553
+    },
+    {
+      "path": "assets/pdf-C7SWdvnA.js",
+      "url": "https://martin.govern-ai.ca/echo/assets/pdf-C7SWdvnA.js",
+      "sha256": "d234d33317872acf9af0b5c4d66e89f56a12168f96b7ef6f7c00aef77938a8de",
+      "build_sha256": "d234d33317872acf9af0b5c4d66e89f56a12168f96b7ef6f7c00aef77938a8de",
+      "matches": true,
+      "bytes": 334221
+    },
+    {
+      "path": "assets/pdf.worker.min-yatZIOMy.mjs",
+      "url": "https://martin.govern-ai.ca/echo/assets/pdf.worker.min-yatZIOMy.mjs",
+      "sha256": "1baa1844c89c80a5b2797c916e75ab29254be46d8e9cb53cb6364d7aad84be36",
+      "build_sha256": "1baa1844c89c80a5b2797c916e75ab29254be46d8e9cb53cb6364d7aad84be36",
+      "matches": true,
+      "bytes": 1375838
+    },
+    {
+      "path": "assets/vendor-EjFya1Jm.js",
+      "url": "https://martin.govern-ai.ca/echo/assets/vendor-EjFya1Jm.js",
+      "sha256": "8d17148405bd58f0a9a8681c7acdf591b71c274aa8aa56a251bc0299dd2ad87d",
+      "build_sha256": "8d17148405bd58f0a9a8681c7acdf591b71c274aa8aa56a251bc0299dd2ad87d",
+      "matches": true,
+      "bytes": 267773
+    },
+    {
+      "path": "index.html",
+      "url": "https://martin.govern-ai.ca/echo/",
+      "sha256": "b49b4ad1b617fef684028786ae14530e03844c265ec33fe4cf48bf41222a3c73",
+      "build_sha256": "b49b4ad1b617fef684028786ae14530e03844c265ec33fe4cf48bf41222a3c73",
+      "matches": true,
+      "bytes": 1860
+    }
+  ]
+}

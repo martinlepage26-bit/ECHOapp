@@ -1,3 +1,5 @@
+> Historical implementation. Current architecture: [ARCHITECTURE.md](../../ARCHITECTURE.md).
+
 # ECHO surface inventory and merge (2026-08-06)
 
 ## Canonical home
