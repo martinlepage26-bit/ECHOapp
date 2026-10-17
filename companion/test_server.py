@@ -79,6 +79,21 @@ class CompanionTests(unittest.TestCase):
         with patch.object(server, 'health', side_effect=ValueError('reference mismatch')):
             self.assertEqual(self.request(method='GET', path='/api/pharos/health')[0], 503)
 
+    def test_an_external_link_can_open_static_reader_but_cannot_call_api(self):
+        with tempfile.TemporaryDirectory() as d, patch.object(server, 'DIST', Path(d)):
+            (Path(d) / 'index.html').write_text('<title>ECHO</title>')
+            headers = {'Sec-Fetch-Site': 'cross-site'}
+            self.assertEqual(self.request(method='GET', path='/echo/', **headers)[0], 200)
+            self.assertEqual(self.request(method='GET', path='/api/pharos/health', **headers)[0], 403)
+
+    def test_head_serves_headers_without_a_body(self):
+        with tempfile.TemporaryDirectory() as d, patch.object(server, 'DIST', Path(d)):
+            (Path(d) / 'index.html').write_text('<title>ECHO</title>')
+            status, headers, body = self.request(method='HEAD', path='/echo/')
+            self.assertEqual(status, 200)
+            self.assertEqual(body, b'')
+            self.assertEqual(headers['Content-Security-Policy'], "frame-ancestors 'none'")
+
     def test_temp_audio_is_validated_and_removed(self):
         fd, path = tempfile.mkstemp(prefix='echosay-', suffix='.wav')
         with os.fdopen(fd, 'wb') as f: f.write(wav_bytes())

@@ -1,5 +1,5 @@
 {
-  "as_of": "2026-10-17T14:27:10.491068+00:00",
+  "as_of": "2026-10-17T14:33:01.604543+00:00",
   "scope": "Mac-local PHAROS voice integration; hosted app not deployed",
   "voice": {
     "engine": "existing PHAROS Echo XTTS-v2",
@@ -13,7 +13,7 @@
   },
   "checks": {
     "node_tests": 48,
-    "python_tests": 12,
+    "python_tests": 14,
     "lint": "passed",
     "build": "passed",
     "installed_launch_agent": "running, loopback only",
@@ -27,11 +27,13 @@
       "render_seconds": 25.88
     },
     "offline_transcript": "Hello Martin, this is Pharoos speaking in Echo.",
-    "browser_playback": "unverified: Chrome automated navigation returned ERR_BLOCKED_BY_CLIENT. User asked to check the exact URL manually."
+    "browser_playback": "passed: native WebAudio realtime context, two real AudioBufferSource clips connected to the output destination, rendering pause/resume, cached playback pause/resume, next sentence and Stop; full reading returned to idle.",
+    "language_guard": "passed in browser: French text with PHAROS selected displays English-only guidance and does not render.",
+    "browser_connection": "passed after supporting ordinary static-page navigation and HEAD requests; strict API origin checks preserved, no browser settings changed."
   },
   "limitations": [
     "English only, preserving PHAROS inference settings.",
-    "Browser pause/resume/cancel logic has controlled AudioContext unit coverage; audible browser output remains unverified.",
+    "Browser audio engine playback verified. No microphone loopback or subjective speaker-quality assessment was performed.",
     "Existing PHAROS model rendering may finish after a reader cancels; its output is not played.",
     "No public tunnel, new voice model, provider credentials or live website deployment."
   ]

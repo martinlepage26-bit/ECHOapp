@@ -135,6 +135,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Referrer-Policy", "no-referrer")
+        self.send_header("Content-Security-Policy", "frame-ancestors 'none'")
         self.send_header("Vary", "Origin")
         origin = self.headers.get("Origin")
         if origin in ORIGINS and self.trusted():
@@ -143,15 +144,20 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Access-Control-Allow-Headers", "Content-Type, X-Echo-Client")
             self.send_header("Access-Control-Allow-Private-Network", "true")
         self.end_headers()
-        self.wfile.write(body)
+        if self.command != 'HEAD':
+            self.wfile.write(body)
 
     def do_OPTIONS(self):
         self.send(204 if self.trusted() else 403, b"")
 
     def do_GET(self):
-        if not self.trusted():
-            self.send(403, {"error": "This reader origin is not allowed."}); return
+        if self.headers.get('Host') not in HOSTS:
+            self.send(403, {"error": "Loopback host only."}); return
         parsed = urllib.parse.urlsplit(self.path)
+        # A normal link from another site may open the reader. API calls still
+        # require a trusted origin; static assets contain no private state.
+        if (parsed.path.startswith('/api/') or parsed.path.startswith('/echo/api/')) and not self.trusted():
+            self.send(403, {"error": "This reader origin is not allowed."}); return
         if parsed.path == "/api/pharos/health":
             try:
                 self.send(200, health())
@@ -182,6 +188,9 @@ class Handler(BaseHTTPRequestHandler):
         if not path.is_file():
             self.send(404, {"error": "Build the ECHO reader first."}); return
         self.send(200, path.read_bytes(), mimetypes.guess_type(path)[0] or "application/octet-stream")
+
+    def do_HEAD(self):
+        self.do_GET()
 
     def do_POST(self):
         if not self.trusted():
