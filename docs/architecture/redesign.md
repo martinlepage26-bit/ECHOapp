@@ -1,3 +1,5 @@
+> Historical implementation. Current architecture: [ARCHITECTURE.md](../../ARCHITECTURE.md).
+
 # ECHO — Radical Simplification Redesign
 
 > Lead-architecture deliverable: review the current system, propose the simplest possible architecture, and give an incremental migration plan.
