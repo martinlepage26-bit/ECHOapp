@@ -1,0 +1,119 @@
+{
+  "date": "2026-10-17",
+  "scope": "Mac-local ECHO PHAROS voice latency; hosted sites unchanged",
+  "baseline_commit": "fd7aaa6b1de2189d168b5f084f6061fddd2b27d5",
+  "test_sentence": "Welcome to ECHO, your personal reading assistant on this Mac.",
+  "baseline_uncached_full_clip_render_seconds": 19.387,
+  "updated_uncached_first_audio_observed_within_seconds": 7.733,
+  "updated_cached_first_audio_observed_within_seconds": 0.372,
+  "browser_requests": [
+    {
+      "text": "Welcome to ECHO,",
+      "start_seconds": 269957.88379,
+      "request_sequence": 48,
+      "response_seconds": 7.64556099998299
+    },
+    {
+      "text": "your personal reading assistant on this Mac.",
+      "start_seconds": 269965.539569,
+      "request_sequence": 57,
+      "response_seconds": 8.775956999976188
+    },
+    {
+      "text": "Welcome to ECHO,",
+      "start_seconds": 270001.778017,
+      "request_sequence": 73,
+      "response_seconds": 0.06921699998201802
+    },
+    {
+      "text": "your personal reading assistant on this Mac.",
+      "start_seconds": 270001.85038,
+      "request_sequence": 82,
+      "response_seconds": 0.0064699999638833106
+    }
+  ],
+  "measurement_notes": [
+    "Baseline is HTTP request-to-complete-WAV time for one 61-character clip; the original player waited for that WAV before audio.",
+    "Updated first audio was observed through native Chrome WebAudio after Play. Browser-control round trips make these first-audio figures upper bounds.",
+    "Both runs used the same resident XTTS process, model and reference. Companion cache was empty after the reversible update installation.",
+    "These are single synthetic readings, not statistical benchmarks or universal latency guarantees.",
+    "A next-clip request occurred after the current AudioBufferSource connected and before it disconnected, proving overlapped synthesis.",
+    "Uncached XTTS inference remains slower than playback; gaps can remain. An already-started inference can finish after Stop."
+  ],
+  "checks": {
+    "node_tests": 52,
+    "python_tests": 17,
+    "lint": "pass",
+    "production_build": "pass",
+    "browser": [
+      "two generated clips completed",
+      "cached replay",
+      "pause",
+      "resume",
+      "stop",
+      "native audio connection",
+      "prefetch before current audio finished"
+    ]
+  },
+  "installed_release": "/Users/pharos_ai/Library/Application Support/ECHOReader/releases/20261017T151235184294Z",
+  "installed_files": [
+    {
+      "path": "dist/assets/index-BLGvHL6G.js",
+      "sha256": "8f43486f1e10efcc790900f2ae50ea9b56d9f8491010053cab92da77660386b7"
+    },
+    {
+      "path": "dist/assets/index-BmDIYgrY.css",
+      "sha256": "982301507d6485e21ec6782e968b5f1bdd9c5e0495bb545206fdcd25f6235b59"
+    },
+    {
+      "path": "dist/assets/pdf-C7SWdvnA.js",
+      "sha256": "d234d33317872acf9af0b5c4d66e89f56a12168f96b7ef6f7c00aef77938a8de"
+    },
+    {
+      "path": "dist/assets/pdf.worker.min-yatZIOMy.mjs",
+      "sha256": "1baa1844c89c80a5b2797c916e75ab29254be46d8e9cb53cb6364d7aad84be36"
+    },
+    {
+      "path": "dist/assets/vendor-EjFya1Jm.js",
+      "sha256": "8d17148405bd58f0a9a8681c7acdf591b71c274aa8aa56a251bc0299dd2ad87d"
+    },
+    {
+      "path": "dist/index.html",
+      "sha256": "ffd3ba4895292442314d8773dcb5c4e9dc9dbad546d613a455a5932a5d776265"
+    },
+    {
+      "path": "companion/server.py",
+      "sha256": "d02f2f94de3bcb50a43bd41539bad1ab28557983084d7ef224bdb378e2e64d87"
+    }
+  ],
+  "unchanged_voice": {
+    "source_sha256": "0a72d10e91a485a44bcd1fc5911404ff38f5c352f13340ce8d21fdf5a1ae2966",
+    "reference_sha256": "1367bb796d941ec4cf8d221b7e971be27ab14966394faa8e254dc6fb4c67c67c",
+    "resident_process_id": 8054
+  },
+  "local_audio_metadata": [
+    {
+      "text": "Welcome to ECHO,",
+      "cached_request_seconds": 0.044247499999999995,
+      "audio_seconds": 1.3866666666666667,
+      "sha256": "f07ccbe37a114d80af93f97d1e10bcbdadc5818698167efaf0496a9c46eef2e8"
+    },
+    {
+      "text": "your personal reading assistant on this Mac.",
+      "cached_request_seconds": 0.0023330000000000017,
+      "audio_seconds": 2.4106666666666667,
+      "sha256": "1a44914d1fcb51e490c991f735ae8fe40646545bf72c43e80cb09bf942584414"
+    }
+  ],
+  "audio_storage": "Generated audio remains in Mac-local evidence only, excluded from GitHub",
+  "hosted_task": "task_dda41c61c4a0f0c7",
+  "github_pr": "https://github.com/martinlepage26-bit/ECHOapp/pull/1",
+  "speech_content_check": {
+    "method": "Existing cached offline MLX Whisper large-v3-turbo",
+    "observations": {
+      "latency-before-2.wav": "Welcome to Echo, your personal reading assistant on this Mac, Dottie.",
+      "latency-after-tail.wav": "Your personal reading assistant on this Mac door."
+    },
+    "note": "ASR recovered the expected phrase but reported an extra trailing word in both baseline and updated audio. This is not an exact speech-fidelity pass; no model or voice parameters were changed for this latency fix."
+  }
+}

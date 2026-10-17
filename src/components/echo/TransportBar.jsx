@@ -77,7 +77,7 @@ export default function TransportBar({
         </span>
       </div>
 
-      {status === 'buffering' && <p role="status" className="text-center text-xs text-muted-foreground">Rendering PHAROS’s voice on this Mac…</p>}
+      {status === 'buffering' && <p role="status" className="text-center text-xs text-muted-foreground">Preparing PHAROS’s next phrase on this Mac…</p>}
 
       {/* One scrolling row on a phone: wrapping pushed the reading pane
           down to almost nothing on a 320px screen. */}

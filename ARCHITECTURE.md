@@ -14,7 +14,7 @@ The active application is a Vite/React reader in `src/` and a Cloudflare Worker 
 | `src/lib/importFile.js`, `zip.js` | In-browser document extraction |
 | `src/lib/drafts.js` | Browser-local draft storage |
 | `worker/index.js` | Static assets and public URL extraction |
-| `src/lib/pharosVoice.js` | 80-character clips, loopback client and cancel-safe Web Audio playback |
+| `src/lib/pharosVoice.js` | Short opening phrase, bounded lookahead and cancel-safe Web Audio playback |
 | `companion/server.py` | Local reader, strict Origin/Host guards and adapter to the existing PHAROS voice service |
 | `test/` | Segmentation, pronunciation and Worker route tests |
 
@@ -38,12 +38,20 @@ The companion verifies PHAROS's reference SHA-256 and calls the existing
 `http://127.0.0.1:8765/speak` with text only. It reads only a user-owned regular
 `echosay-*.wav` in a system temp directory, validates 24 kHz mono PCM16, returns
 audio bytes, and removes that temporary file. An in-memory LRU holds at most
-32 MiB; its key includes text and installed service/reference identity. PHAROS's
+32 MiB; its key includes text and installed service/reference identity. Cache
+access has its own lock so a hit bypasses unrelated rendering and a full queue.
+Waiting requests check for a disconnected caller before acquiring the model
+lock and again before synthesis; already-started inference can still finish.
+PHAROS's
 resident model serializes inference; this adapter creates no agent executor,
 queue daemon, microphone owner or model process.
 
-The browser resumes its own AudioContext on the Play gesture, renders bounded
-clips, and measures progress from actual decoded audio duration. Generation IDs
+The browser resumes its own AudioContext on the Play gesture. The first phrase
+is at most 24 characters, followed by clips of at most 48 characters. It renders
+and decodes one next clip during current playback, including across sentence
+boundaries. Lookahead stops at that one clip while paused; prefetch failures
+surface after current playback rather than cutting it off. Progress comes from
+actual decoded audio duration. Generation IDs
 and abort signals suppress stale replies after Stop or seek. English-only
 PHAROS mode never falls back silently to browser speech. Existing browser voice
 behavior is retained. URL import in the local reader forwards only to the

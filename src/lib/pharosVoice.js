@@ -3,16 +3,26 @@ export const PHAROS_VOICE = {
   id: 'pharos-echo', name: 'PHAROS · Echo', lang: 'en', local: true, pharos: true,
 };
 
-// Keep requests short without dropping long tokens or splitting surrogate pairs.
-export function packVoiceClips(text, limit = 80) {
-  if (!Number.isInteger(limit) || limit < 1) throw new Error('Clip limit must be positive.');
+// Start with a short phrase, then use longer clips to retain natural phrasing.
+export const START_CLIP_CHARS = 24;
+export const CLIP_CHARS = 48;
+
+// Prefer phrase/word boundaries without dropping text or splitting surrogate pairs.
+export function packVoiceClips(text, limit = CLIP_CHARS, firstLimit = limit) {
+  if (![limit, firstLimit].every((n) => Number.isInteger(n) && n > 0)) throw new Error('Clip limit must be positive.');
   const chars = Array.from(String(text).trim().replace(/\s+/g, ' '));
   const clips = [];
   while (chars.length) {
-    let end = Math.min(limit, chars.length);
+    const size = clips.length ? limit : Math.min(firstLimit, limit);
+    let end = Math.min(size, chars.length);
     if (end < chars.length) {
+      let phraseEnd = 0;
+      for (let i = Math.floor(size / 2); i < end; i++) {
+        if (/[,.!?;:]/.test(chars[i]) && chars[i + 1] === ' ') phraseEnd = i + 1;
+      }
       const space = chars.lastIndexOf(' ', end);
-      if (space > limit / 2) end = space;
+      if (phraseEnd) end = phraseEnd;
+      else if (space > size / 2) end = space;
     }
     clips.push(chars.splice(0, end).join('').trim());
     while (chars[0] === ' ') chars.shift();
@@ -87,35 +97,58 @@ export function createPharosPlayer({ render = renderClip, makeContext = () => ne
       const ready = unlock();
       (async () => {
         await ready;
-        for (let i = startIndex; i < settings.current.sentences.length; i++) {
-          if (run !== generation) return;
-          const sentence = settings.current.sentences[i];
-          const clips = packVoiceClips(settings.current.spokenFor(sentence).spoken || sentence.text);
-          total = clips.length; position = 0; clipDuration = 0;
-          cb.onSentence(i);
-          for (const [n, text] of clips.entries()) {
-            if (run !== generation) return;
-            position = n; clipDuration = 0;
-            cb.onStatus(paused ? 'paused' : 'buffering');
-            const bytes = await render(text, signal);
-            if (run !== generation) return;
-            const buffer = await context.decodeAudioData(bytes);
-            if (run !== generation) return;
-            if (paused) await new Promise((resolve) => { release = resolve; });
-            if (run !== generation) return;
-            source = context.createBufferSource();
-            source.buffer = buffer;
-            rate = settings.current.rate;
-            source.playbackRate.value = rate;
-            source.connect(context.destination);
-            clipDuration = buffer.duration; clipStart = context.currentTime;
-            const ended = new Promise((resolve) => { release = resolve; source.onended = resolve; });
-            cb.onStatus('playing');
-            source.start();
-            await ended;
-            if (run !== generation) return;
-            source.disconnect(); source = null; release = null;
+        if (run !== generation) return;
+        function* reading() {
+          let first = true;
+          for (let i = startIndex; i < settings.current.sentences.length; i++) {
+            const sentence = settings.current.sentences[i];
+            const clips = packVoiceClips(settings.current.spokenFor(sentence).spoken || sentence.text,
+              CLIP_CHARS, first ? START_CLIP_CHARS : CLIP_CHARS);
+            for (const [n, text] of clips.entries()) yield { sentence: i, position: n, total: clips.length, text };
+            first = false;
           }
+        }
+        const clips = reading();
+        function prepare() {
+          const { value: clip, done } = clips.next();
+          if (done) return null;
+          // Settle failures immediately, including when Stop discards a prefetch.
+          // At most one next clip is prepared; never enqueue the whole document.
+          const result = (async () => {
+            if (run !== generation) return {};
+            const bytes = await render(clip.text, signal);
+            if (run !== generation) return {};
+            return { buffer: await context.decodeAudioData(bytes) };
+          })().catch((error) => ({ error }));
+          return { clip, result };
+        }
+        let pending = prepare(), sentenceIndex = -1;
+        while (pending) {
+          const { clip, result } = pending;
+          if (run !== generation) return;
+          total = clip.total; position = clip.position; clipDuration = 0;
+          if (clip.sentence !== sentenceIndex) {
+            sentenceIndex = clip.sentence; cb.onSentence(sentenceIndex);
+          }
+          cb.onStatus(paused ? 'paused' : 'buffering');
+          const { buffer, error } = await result;
+          if (run !== generation) return;
+          if (error) throw error;
+          if (paused) await new Promise((resolve) => { release = resolve; });
+          if (run !== generation) return;
+          source = context.createBufferSource();
+          source.buffer = buffer;
+          rate = settings.current.rate;
+          source.playbackRate.value = rate;
+          source.connect(context.destination);
+          clipDuration = buffer.duration; clipStart = context.currentTime;
+          const ended = new Promise((resolve) => { release = resolve; source.onended = resolve; });
+          cb.onStatus('playing');
+          source.start();
+          pending = prepare();
+          await ended;
+          if (run !== generation) return;
+          source.disconnect(); source = null; release = null;
         }
         if (run === generation) cb.onEnd();
       })().catch((error) => {
@@ -133,7 +166,7 @@ export function createPharosPlayer({ render = renderClip, makeContext = () => ne
       paused = false;
       const run = generation;
       context?.resume().then(() => {
-        if (run !== generation) return;
+        if (run !== generation || paused) return;
         // A pending render will start playback when it completes.
         if (!source) { release?.(); release = null; }
         callbacks?.onStatus(source ? 'playing' : 'buffering');

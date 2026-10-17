@@ -45,10 +45,15 @@ npm run voice:local
 ```
 
 In the voice menu, choose **Connect PHAROS on this Mac**, then Play. This voice
-is English only; other languages retain their browser voices. The first clip
-needs local synthesis time; the transport shows rendering progress. Pause,
+is English only; other languages retain their browser voices. Playback starts
+with a phrase of at most 24 characters, then prepares one next clip during
+playback. Subsequent clips are at most 48 characters, preferring punctuation
+and word boundaries. Uncached speech still needs local synthesis time; the
+transport shows when it is preparing audio. Cached clips play without waiting
+for unrelated synthesis. Pause,
 resume, stop, speed and sentence navigation work with actual generated audio.
-Stopping discards unfinished results; already-started model inference may
+Stopping discards unfinished results and skips disconnected queued requests;
+already-started model inference may
 finish in the background. No fallback voice is substituted after an error.
 
 For a durable macOS installation after building, run `python3 companion/install.py`.

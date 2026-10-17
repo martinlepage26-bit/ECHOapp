@@ -2,6 +2,7 @@ import http.client
 import io
 import json
 import os
+import socket
 import tempfile
 import threading
 import unittest
@@ -26,7 +27,7 @@ class CompanionTests(unittest.TestCase):
         cls.http = server.ThreadingHTTPServer(('127.0.0.1', 0), server.Handler)
         cls.calls = []
         class Synth:
-            def render(self, text):
+            def render(self, text, cancelled=lambda: False):
                 cls.calls.append(text); return wav_bytes()
         cls.http.synthesizer = Synth()
         cls.thread = threading.Thread(target=cls.http.serve_forever, daemon=True)
@@ -136,6 +137,64 @@ class CompanionTests(unittest.TestCase):
         for _ in range(3): synth.slots.acquire()
         with patch.object(server, 'voice_identity', return_value='same-service'):
             with self.assertRaises(BlockingIOError): synth.render('Hello.')
+
+    def test_cached_audio_bypasses_busy_model_and_full_queue(self):
+        synth = server.Synthesizer()
+        audio = wav_bytes()
+        response = io.BytesIO(json.dumps({'path': '/tmp/echosay-fixture.wav'}).encode())
+        result = []
+        with patch.object(server, 'voice_identity', return_value='same-service'), patch.object(server.HTTP, 'open', return_value=response) as send, patch.object(server, 'read_audio', return_value=audio):
+            synth.render('Hello.')
+            synth.lock.acquire()
+            for _ in range(3): synth.slots.acquire()
+            worker = threading.Thread(target=lambda: result.append(synth.render('Hello.')))
+            try:
+                worker.start(); worker.join(timeout=1)
+                self.assertEqual(result, [audio])
+                self.assertEqual(send.call_count, 1)
+            finally:
+                synth.lock.release()
+                for _ in range(3): synth.slots.release()
+                worker.join(timeout=2)
+
+    def test_stopped_queued_request_releases_its_slot_without_calling_model(self):
+        synth = server.Synthesizer()
+        waiting, stopped = threading.Event(), threading.Event()
+        errors = []
+        checks = 0
+        def cancelled():
+            nonlocal checks
+            checks += 1
+            if checks >= 2: waiting.set()  # A queue slot has been admitted.
+            return stopped.is_set()
+        def render():
+            try: synth.render('Obsolete phrase.', cancelled)
+            except server.RenderCancelled: errors.append('cancelled')
+        with patch.object(server, 'voice_identity', return_value='same-service'), patch.object(server.HTTP, 'open') as send:
+            synth.lock.acquire()
+            worker = threading.Thread(target=render)
+            try:
+                worker.start(); self.assertTrue(waiting.wait(timeout=1))
+                stopped.set(); worker.join(timeout=1)
+                self.assertEqual(errors, ['cancelled'])
+                send.assert_not_called()
+                for _ in range(3): self.assertTrue(synth.slots.acquire(blocking=False))
+            finally:
+                synth.lock.release(); worker.join(timeout=2)
+
+    def test_disconnected_client_is_detected_without_consuming_pending_data(self):
+        incoming, outgoing = socket.socketpair()
+        handler = object.__new__(server.Handler)
+        handler.connection = incoming
+        try:
+            self.assertFalse(handler.disconnected())
+            outgoing.sendall(b'x')
+            self.assertFalse(handler.disconnected())
+            self.assertEqual(incoming.recv(1), b'x')
+            outgoing.close()
+            self.assertTrue(handler.disconnected())
+        finally:
+            incoming.close(); outgoing.close()
 
 
 if __name__ == '__main__':

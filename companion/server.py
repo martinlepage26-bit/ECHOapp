@@ -5,6 +5,8 @@ import io
 import json
 import mimetypes
 import os
+import select
+import socket
 import stat
 import tempfile
 import threading
@@ -85,32 +87,58 @@ def read_audio(path):
             path.unlink(missing_ok=True)
 
 
+class RenderCancelled(Exception):
+    pass
+
+
 class Synthesizer:
     def __init__(self):
         self.lock = threading.Lock()
+        self.cache_lock = threading.Lock()
         self.slots = threading.BoundedSemaphore(3)
         self.cache = OrderedDict()
 
-    def render(self, text):
+    def cached(self, key):
+        with self.cache_lock:
+            if key in self.cache:
+                self.cache.move_to_end(key)
+                return self.cache[key]
+
+    def render(self, text, cancelled=lambda: False):
         identity = voice_identity()
         key = hashlib.sha256((identity + REFERENCE_SHA + text).encode()).hexdigest()
+        if cancelled():
+            raise RenderCancelled()
+        # A cached phrase must not wait behind unrelated model inference.
+        hit = self.cached(key)
+        if hit is not None:
+            return hit
         # Small bounded queue. Never starts a second model or changes inference parameters.
         if not self.slots.acquire(blocking=False):
             raise BlockingIOError("PHAROS is busy. Try again shortly.")
+        acquired = False
         try:
-            with self.lock:
-                if key in self.cache:
-                    self.cache.move_to_end(key)
-                    return self.cache[key]
-                request = urllib.request.Request(XTTS + "/speak", json.dumps({"text": text}).encode(), {"Content-Type": "application/json"})
-                with HTTP.open(request, timeout=150) as response:
-                    result = json.loads(response.read(4096))
-                data = read_audio(result["path"])
+            while not acquired:
+                if cancelled():
+                    raise RenderCancelled()
+                acquired = self.lock.acquire(timeout=0.1)
+            if cancelled():
+                raise RenderCancelled()
+            hit = self.cached(key)
+            if hit is not None:
+                return hit
+            request = urllib.request.Request(XTTS + "/speak", json.dumps({"text": text}).encode(), {"Content-Type": "application/json"})
+            with HTTP.open(request, timeout=150) as response:
+                result = json.loads(response.read(4096))
+            data = read_audio(result["path"])
+            with self.cache_lock:
                 self.cache[key] = data
                 while sum(map(len, self.cache.values())) > MAX_CACHE:
                     self.cache.popitem(last=False)
-                return data
+            return data
         finally:
+            if acquired:
+                self.lock.release()
             self.slots.release()
 
 
@@ -125,6 +153,18 @@ class Handler(BaseHTTPRequestHandler):
         if origin is not None:
             return origin in ORIGINS
         return self.headers.get("Sec-Fetch-Site") in (None, "none", "same-origin")
+
+    def disconnected(self):
+        # Body has already been read. Peek for EOF/RST without consuming data.
+        # Aborted prefetches waiting for the model must not render after Stop/seek.
+        try:
+            if select.select([self.connection], [], [], 0)[0]:
+                return self.connection.recv(1, socket.MSG_PEEK | socket.MSG_DONTWAIT) == b""
+        except (BlockingIOError, InterruptedError):
+            return False
+        except OSError:
+            return True
+        return False
 
     def send(self, code, body, content_type="application/json"):
         if not isinstance(body, bytes):
@@ -207,10 +247,10 @@ class Handler(BaseHTTPRequestHandler):
         except (ValueError, TypeError):
             self.send(400, {"error": "Provide a text clip of 1–80 characters."}); return
         try:
-            self.send(200, self.server.synthesizer.render(text), "audio/wav")
+            self.send(200, self.server.synthesizer.render(text, cancelled=self.disconnected), "audio/wav")
         except BlockingIOError as error:
             self.send(429, {"error": str(error)})
-        except (BrokenPipeError, ConnectionResetError):
+        except (RenderCancelled, BrokenPipeError, ConnectionResetError):
             pass  # A stopped reader discards the result; PHAROS keeps running.
         except Exception:
             self.send(503, {"error": "PHAROS could not render this clip. Check its voice service and try again."})
