@@ -47,3 +47,18 @@ test('surfaces upstream errors instead of returning an empty successful import',
   assert.equal(res.status, 502);
   assert.match((await res.json()).error, /404/);
 });
+
+test('asset redirects keep the /echo mount (/echo/index.html -> /echo/)', async () => {
+  const env = { ASSETS: { fetch: async (req) => {
+    const path = new URL(req.url).pathname;
+    if (path === '/index.html') return new Response(null, { status: 307, headers: { Location: '/' } });
+    if (path === '/away') return new Response(null, { status: 302, headers: { Location: 'https://other.example/x' } });
+    return new Response('asset');
+  } } };
+  const res = await worker.fetch(request('/echo/index.html'), env);
+  assert.equal(res.status, 307);
+  assert.equal(res.headers.get('Location'), '/echo/');
+  const away = await worker.fetch(request('/echo/away'), env);
+  assert.equal(away.headers.get('Location'), 'https://other.example/x');
+  assert.equal(await (await worker.fetch(request('/echo/'), env)).text(), 'asset');
+});
