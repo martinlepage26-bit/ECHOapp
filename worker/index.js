@@ -194,6 +194,25 @@ async function handleExtract(request) {
   return json({ text, title: title || current.hostname, source: current.toString() });
 }
 
+/**
+ * The asset binding sees paths without the mount, so its own redirects (for
+ * example /index.html -> /) would leave the reader. Put the mount back on any
+ * same-origin redirect that lacks it: /echo/index.html -> /echo/.
+ */
+export function remountRedirect(response, requestUrl) {
+  if (response.status < 300 || response.status > 399) return response;
+  const location = response.headers.get('Location');
+  if (!location) return response;
+  const origin = new URL(requestUrl).origin;
+  const target = new URL(location, origin);
+  if (target.origin !== origin) return response;
+  if (target.pathname === MOUNT || target.pathname.startsWith(`${MOUNT}/`)) return response;
+  target.pathname = `${MOUNT}${target.pathname}`;
+  const headers = new Headers(response.headers);
+  headers.set('Location', `${target.pathname}${target.search}${target.hash}`);
+  return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -208,6 +227,7 @@ export default {
     if (url.pathname === MOUNT) url.pathname = '/';
     else if (url.pathname.startsWith(`${MOUNT}/`)) url.pathname = url.pathname.slice(MOUNT.length);
 
-    return env.ASSETS.fetch(new Request(url, request));
+    const response = await env.ASSETS.fetch(new Request(url, request));
+    return remountRedirect(response, request.url);
   },
 };
