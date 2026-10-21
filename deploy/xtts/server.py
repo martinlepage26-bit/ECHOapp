@@ -31,6 +31,9 @@ def load_token():
     path = os.path.expanduser(os.environ.get("ECHO_XTTS_TOKEN_FILE", "~/.config/echo-xtts/token"))
     tok = ""
     try:
+        if os.stat(path).st_mode & 0o077:
+            print("echo-xtts: token file must be chmod 600; refusing it", flush=True)
+            return None
         with open(path) as f: tok = f.read().strip()
     except OSError:
         tok = os.environ.get("ECHO_XTTS_TOKEN", "").strip()

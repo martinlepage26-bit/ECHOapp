@@ -89,12 +89,23 @@ class TokenLoadTest(unittest.TestCase):
     def test_short_or_missing_token_is_none(self):
         import tempfile
         with tempfile.NamedTemporaryFile("w", delete=False) as f: f.write("short\n")
+        os.chmod(f.name, 0o600)
         os.environ["ECHO_XTTS_TOKEN_FILE"] = f.name
         try:
             self.assertIsNone(server.load_token())
             open(f.name, "w").write("k" * 40 + "\n"); self.assertEqual(server.load_token(), "k" * 40)
             os.environ["ECHO_XTTS_TOKEN_FILE"] = f.name + ".missing"; os.environ.pop("ECHO_XTTS_TOKEN", None)
             self.assertIsNone(server.load_token())
+        finally:
+            os.environ.pop("ECHO_XTTS_TOKEN_FILE", None); os.unlink(f.name)
+
+    def test_group_or_world_readable_token_is_refused(self):
+        import tempfile
+        with tempfile.NamedTemporaryFile("w", delete=False) as f: f.write("k" * 40)
+        os.environ["ECHO_XTTS_TOKEN_FILE"] = f.name
+        try:
+            os.chmod(f.name, 0o644); self.assertIsNone(server.load_token())
+            os.chmod(f.name, 0o600); self.assertEqual(server.load_token(), "k" * 40)
         finally:
             os.environ.pop("ECHO_XTTS_TOKEN_FILE", None); os.unlink(f.name)
 
