@@ -10,6 +10,7 @@
  */
 
 import { handleTts, handleTtsHealth } from './tts.js';
+import { guardTts } from './access.js';
 
 const MOUNT = '/echo';
 const MAX_BYTES = 3 * 1024 * 1024;
@@ -226,9 +227,13 @@ export default {
 
     if (url.pathname === `${MOUNT}/api/tts` || url.pathname === '/api/tts') {
       if (request.method !== 'POST') return json({ error: 'Use POST.' }, 405);
+      const denied = await guardTts(request, env);
+      if (denied) return denied;
       return handleTts(request, env);
     }
     if (url.pathname === `${MOUNT}/api/tts/health` || url.pathname === '/api/tts/health') {
+      const denied = await guardTts(request, env);
+      if (denied) return denied;
       return handleTtsHealth(env);
     }
 

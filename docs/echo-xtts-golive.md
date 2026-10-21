@@ -20,6 +20,7 @@ times out, or returns non-audio. The UI has no browser speech fallback.
 - `GET /health` -> `{"service":"echo-xtts","ready":true,"engine":"xtts","voices":["echo","martin"],"default":"echo"}`
 - `POST /tts` `{"text":"...","voice":"echo|martin","engine":"xtts","lang":"fr|en"}` -> `audio/wav` (24 kHz mono PCM16).
   400 on empty/over-600-char text, unknown voice, engine other than `xtts`, or unsupported lang.
+- Token: `~/.config/echo-xtts/token` (created locally, chmod 600). Requests need header `X-Echo-Origin-Token`.
 - Run: `COQUI_TOS_AGREED=1 PYTORCH_ENABLE_MPS_FALLBACK=1 TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1 ~/.local/share/echo-voice/.venv-torch28/bin/python deploy/xtts/server.py`
 
 ## Caveats (read before go-live)
@@ -29,13 +30,37 @@ times out, or returns non-audio. The UI has no browser speech fallback.
   Echo has no voice and shows "Echo voice unavailable" (by design, no fallback).
 - First request after start is slow while the model loads; `/health` reports `ready:false` until then.
 
-## F5-TTS (optional, removable)
-`deploy/f5tts/` is kept behind config only (`TTS_ENGINE = "f5"` plus pointing `TTS_UPSTREAM` at an F5 origin on `127.0.0.1:5434`).
-It is not the default. Delete `deploy/f5tts/` to remove it; nothing else imports it.
+## Security (Argus gate 2026-10-21 responses)
+- **Viewer gate (M1).** The Worker requires a valid Cloudflare Access JWT (`Cf-Access-Jwt-Assertion`) on `/echo/api/tts` and
+  `/echo/api/tts/health`, for both voices: RS256 signature against `https://<ACCESS_TEAM_DOMAIN>/cdn-cgi/access/certs`,
+  `aud` in `ACCESS_AUD`, `exp` not passed, `iss` = team domain, `email` in `ACCESS_ALLOWED_EMAILS`.
+  No token -> 401; bad signature/expired -> 401; wrong aud or email -> 403; any of the three vars empty -> 403.
+- **Rate limit.** Per signed-in email: Workers rate-limiting binding `TTS_RATE_LIMITER` if bound, else a per-isolate
+  counter (`TTS_RATE_PER_MIN`, default 30/min) -> 429. Edge backstop (free plan allows one rule): Security > WAF >
+  Rate limiting rules: `URI Path starts with "/echo/api/tts"` on `martin.govern-ai.ca`, 10 requests / 10 s per IP, action Block 10 s.
+- **Origin auth (M2).** `deploy/xtts/server.py` requires `X-Echo-Origin-Token` matching `~/.config/echo-xtts/token`
+  (>=32 chars, chmod 600; or env `ECHO_XTTS_TOKEN`). No token configured -> 503 for everything; wrong/missing -> 403.
+  The Host allowlist is kept but is not relied on. The Worker refuses to call the origin without `TTS_ORIGIN_TOKEN`.
+- **Busy (S1).** One synthesis at a time plus `ECHO_XTTS_MAX_QUEUE` waiting (default 2); extra requests get 503 at once.
+- **F5 (S2).** `deploy/f5tts/` was removed; `TTS_ENGINE` only accepts `xtts`. `build_refs.py` moved to `deploy/xtts/`.
 
 ## Rollback point
 Worker `echo` current version: `01038eb5-a267-4446-9889-f5f87460e95f` (deployed 2026-10-17).
 Rollback: `npx wrangler rollback 01038eb5-a267-4446-9889-f5f87460e95f --name echo`.
+
+## What Martin configures in Cloudflare (Zero Trust, free plan)
+- Team name: Zero Trust > Settings > Custom Pages / team domain -> `<team>.cloudflareaccess.com` => `ACCESS_TEAM_DOMAIN`.
+- Access app A (viewer): Self-hosted, domain `martin.govern-ai.ca`, path `echo` (covers `/echo/*`, so the page itself logs in
+  and API calls carry the JWT). Policy Allow, include Emails = Martin's sign-in email. Copy its **AUD tag** => `ACCESS_AUD`.
+  Put the same email(s) in `ACCESS_ALLOWED_EMAILS`.
+- Access app B (origin): Self-hosted `tts.govern-ai.ca`, policy action **Service Auth**, include only service token `echo-worker-tts`.
+
+## Pre-deploy checks (must pass before `npm run deploy`)
+1. `curl -s -o /dev/null -w '%{http_code}\n' https://tts.govern-ai.ca/health` (no headers) -> `403`.
+2. Same with only the service-token headers (no origin token) -> `403` from the origin.
+3. Locally: `curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8765/health` -> `403`.
+4. After deploy: `curl -s -o /dev/null -w '%{http_code}\n' -X POST https://martin.govern-ai.ca/echo/api/tts -d '{"text":"x","voice":"martin"}'`
+   -> `302`/`401`/`403` (Access login), never audio.
 
 ## Steps (on the Mac, never on CT920; each needs Martin's OK)
 1. `brew install cloudflared && cloudflared tunnel login` (browser sign-in, zone govern-ai.ca).
@@ -45,7 +70,8 @@ Rollback: `npx wrangler rollback 01038eb5-a267-4446-9889-f5f87460e95f --name ech
 5. `cloudflared tunnel route dns echo-tts tts.govern-ai.ca`, then `cloudflared tunnel --config ~/.cloudflared/echo-tts.yml run echo-tts`.
 6. Load the XTTS server: copy `deploy/xtts/ca.govern-ai.echo-xtts.plist` to `~/Library/LaunchAgents/`, remove its `Disabled` key, then
    `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/ca.govern-ai.echo-xtts.plist`.
-7. `npx wrangler secret put CF_ACCESS_CLIENT_ID --name echo` and `npx wrangler secret put CF_ACCESS_CLIENT_SECRET --name echo`.
+7. `npx wrangler secret put CF_ACCESS_CLIENT_ID --name echo`, `... CF_ACCESS_CLIENT_SECRET ...`, and
+   `... TTS_ORIGIN_TOKEN ...` (paste the contents of `~/.config/echo-xtts/token`; never in chat). Fill the three `ACCESS_*` vars in `wrangler.toml`.
 8. Merge this PR, then `npm run deploy`. Check `https://martin.govern-ai.ca/echo/api/tts/health` -> `{"ready":true}` and play both voices.
 
 ## Undo

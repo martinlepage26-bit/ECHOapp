@@ -18,10 +18,21 @@ pattern = "martin.govern-ai.ca/echo/*"
 zone_name = "govern-ai.ca"
 
 # Echo voice. The XTTS-v2 origin (deploy/xtts/server.py) sits behind a Cloudflare Access-protected tunnel.
-# TTS_ENGINE = "xtts" (default) or "f5" (deploy/f5tts, optional, removable).
 # Secrets (set with `wrangler secret put`, never committed):
-#   CF_ACCESS_CLIENT_ID, CF_ACCESS_CLIENT_SECRET
+#   CF_ACCESS_CLIENT_ID, CF_ACCESS_CLIENT_SECRET   Access service token for the tunnel hop
+#   TTS_ORIGIN_TOKEN                               shared token the origin itself checks (same value as ~/.config/echo-xtts/token)
+# Viewer gate (Argus M1): /echo/api/tts* requires a valid Cloudflare Access JWT. Empty values fail closed (403).
 [vars]
 TTS_UPSTREAM = "https://tts.govern-ai.ca"
 TTS_ENGINE = "xtts"
 TTS_TIMEOUT_MS = "60000"
+TTS_RATE_PER_MIN = "30"
+ACCESS_TEAM_DOMAIN = ""      # e.g. "<team>.cloudflareaccess.com"
+ACCESS_AUD = ""              # AUD tag of the Access app on martin.govern-ai.ca/echo
+ACCESS_ALLOWED_EMAILS = ""   # comma-separated, e.g. Martin's sign-in email
+
+# Optional: Workers rate-limiting binding (used instead of the per-isolate counter when bound).
+# [[ratelimits]]
+# name = "TTS_RATE_LIMITER"
+# namespace_id = "1001"
+# simple = { limit = 30, period = 60 }

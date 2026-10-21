@@ -5,9 +5,12 @@ GET  /health -> {"service","ready","engine","voices","default"}
 
 Reference clips per voice come from env (ECHO_XTTS_REF_ECHO, ECHO_XTTS_REF_MARTIN).
 Licence: XTTS-v2 weights are under the Coqui Public Model License (non-commercial).
+Auth (Argus M2): every request needs X-Echo-Origin-Token equal to the shared token read from
+ECHO_XTTS_TOKEN_FILE (default ~/.config/echo-xtts/token) or ECHO_XTTS_TOKEN. No token configured -> 503 for all.
+The token is never logged. Concurrency (Argus S1): 1 synthesis + ECHO_XTTS_MAX_QUEUE waiting (default 2), else 503.
 Stdlib HTTP only; the model is imported lazily so validation is testable without torch.
 """
-import io, json, os, threading, wave
+import hmac, io, json, os, threading, wave
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HOST = "127.0.0.1"
@@ -19,6 +22,33 @@ REFS = {
     "echo": os.path.expanduser(os.environ.get("ECHO_XTTS_REF_ECHO", "~/.local/share/echo-voice/reference.wav")),
     "martin": os.path.expanduser(os.environ.get("ECHO_XTTS_REF_MARTIN", "~/.local/share/f5tts/voices/martin.wav")),
 }
+MAX_QUEUE = int(os.environ.get("ECHO_XTTS_MAX_QUEUE", "2"))
+TOKEN_HEADER = "X-Echo-Origin-Token"
+
+
+def load_token():
+    """Shared origin token from file (preferred) or env. Empty/short -> None (fail closed)."""
+    path = os.path.expanduser(os.environ.get("ECHO_XTTS_TOKEN_FILE", "~/.config/echo-xtts/token"))
+    tok = ""
+    try:
+        with open(path) as f: tok = f.read().strip()
+    except OSError:
+        tok = os.environ.get("ECHO_XTTS_TOKEN", "").strip()
+    return tok if len(tok) >= 32 else None
+
+
+def authorized(expected, presented):
+    return bool(expected) and bool(presented) and hmac.compare_digest(expected.encode(), presented.encode())
+
+
+class Gate:
+    """Admit at most 1 + max_queue requests; the rest get 503 immediately."""
+    def __init__(self, max_queue=MAX_QUEUE):
+        self.slots = threading.BoundedSemaphore(1 + max_queue)
+    def try_enter(self): return self.slots.acquire(blocking=False)
+    def leave(self): self.slots.release()
+
+
 ALLOWED_HOSTS = set(os.environ.get(
     "ECHO_XTTS_ALLOWED_HOSTS", f"127.0.0.1:{PORT},localhost:{PORT},tts.govern-ai.ca").split(","))
 
@@ -63,7 +93,8 @@ class Engine:
         return buf.getvalue()
 
 
-def make_handler(engine):
+def make_handler(engine, token=None, gate=None):
+    gate = gate or Gate()
     class H(BaseHTTPRequestHandler):
         def log_message(self, *a): pass
 
@@ -76,6 +107,10 @@ def make_handler(engine):
         def guarded(self):
             if self.headers.get("host", "") not in ALLOWED_HOSTS:
                 self.send(403, {"error": "forbidden host"}); return False
+            if not token:
+                self.send(503, {"error": "origin token not configured"}); return False
+            if not authorized(token, self.headers.get(TOKEN_HEADER, "")):
+                self.send(403, {"error": "forbidden"}); return False
             return True
 
         def do_GET(self):
@@ -94,10 +129,17 @@ def make_handler(engine):
             except (ValueError, json.JSONDecodeError) as e:
                 return self.send(400, {"error": str(e) or "bad json"})
             if engine.model is None: return self.send(503, {"error": "not ready"})
-            self.send(200, engine.speak(text, voice, lang), "audio/wav")
+            if not gate.try_enter(): return self.send(503, {"error": "busy"})
+            try:
+                audio = engine.speak(text, voice, lang)
+            finally:
+                gate.leave()
+            self.send(200, audio, "audio/wav")
     return H
 
 
 if __name__ == "__main__":
+    tok = load_token()
+    if not tok: print("echo-xtts: no origin token configured; every request will get 503", flush=True)
     eng = Engine(); eng.load()
-    ThreadingHTTPServer((HOST, PORT), make_handler(eng)).serve_forever()
+    ThreadingHTTPServer((HOST, PORT), make_handler(eng, tok)).serve_forever()

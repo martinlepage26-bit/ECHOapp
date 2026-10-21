@@ -1,4 +1,4 @@
-/** Echo voice: proxy to the local voice origin (XTTS-v2 default, F5-TTS optional) behind a Cloudflare Access-protected tunnel. */
+/** Echo voice: proxy to the local voice origin (XTTS-v2) behind a Cloudflare Access-protected tunnel. */
 
 const json = (body, status = 200) =>
   new Response(JSON.stringify(body), {
@@ -9,7 +9,7 @@ const json = (body, status = 200) =>
 /* ── Echo voice (XTTS-v2 default, via protected tunnel) ───────────────────────── */
 
 export const VOICES = new Set(['echo', 'martin']);
-export const ENGINES = new Set(['xtts', 'f5']);
+export const ENGINES = new Set(['xtts']);
 export const DEFAULT_ENGINE = 'xtts';
 export const LANGS = new Set(['fr', 'en']);
 const engineOf = (env) => (ENGINES.has(env.TTS_ENGINE) ? env.TTS_ENGINE : DEFAULT_ENGINE);
@@ -35,6 +35,9 @@ export function ttsUpstream(env = {}) {
     // Never reach a public origin without the Access service token.
     return { error: 'missing_secret' };
   }
+  // The origin itself requires a shared token (Argus M2); never call it without one.
+  if (env.TTS_ORIGIN_TOKEN) headers['X-Echo-Origin-Token'] = env.TTS_ORIGIN_TOKEN;
+  else return { error: 'missing_secret' };
   if (url.protocol !== 'https:' && !local) return { error: 'not_configured' };
   return { base: url.toString().replace(/\/$/, ''), headers };
 }
