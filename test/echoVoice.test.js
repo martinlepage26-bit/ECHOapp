@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { setImmediate } from 'node:timers/promises';
-import { packVoiceClips, createPharosPlayer, initialBufferDelay, START_CLIP_CHARS, CLIP_CHARS } from '../src/lib/pharosVoice.js';
+import { packVoiceClips, createEchoPlayer, initialBufferDelay, START_CLIP_CHARS, CLIP_CHARS } from '../src/lib/echoVoice.js';
 
 function setup(render, extra = {}) {
   const events = [], sources = [];
@@ -14,7 +14,7 @@ function setup(render, extra = {}) {
       sources.push(source); return source;
     },
   };
-  const player = createPharosPlayer({ render, makeContext: () => context, ...extra });
+  const player = createEchoPlayer({ render, makeContext: () => context, ...extra });
   const settings = { current: { sentences: [{ text: 'Hello Martin.' }], spokenFor: (s) => ({ spoken: s.text }), rate: 1 } };
   const callbacks = {
     onSentence: (n) => events.push(`sentence:${n}`), onStatus: (s) => events.push(s),

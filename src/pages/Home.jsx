@@ -160,9 +160,8 @@ export default function Home() {
             selectedVoiceId={speech.selectedVoiceId}
             selectedVoice={speech.selectedVoice}
             onSelect={speech.setSelectedVoiceId}
-            preferredLang={speech.detectedLanguage?.code}
-            pharosStatus={speech.pharosStatus}
-            onConnectPharos={speech.connectLocalVoice}
+            voiceStatus={speech.voiceStatus}
+            onRetry={speech.refreshVoice}
           />
           {speech.detectedLanguage && (
             <span className="inline-flex items-center gap-1 rounded-full border border-lilac/20
@@ -176,11 +175,11 @@ export default function Home() {
         <SpeedControl rate={speech.rate} onRateChange={speech.setRate} />
       </div>
 
-      {(speech.error || !speech.supported) && (
+      {(speech.error || speech.voiceStatus === 'unavailable') && (
         <div className="relative z-10 flex items-center gap-2 bg-destructive/10 px-4 py-2
                         text-sm text-destructive md:px-6">
           <AlertCircle className="h-4 w-4 shrink-0" />
-          {speech.error || 'This browser has no speech synthesis. Try Chrome, Edge, or Safari.'}
+          {speech.error || 'Echo voice unavailable · Voix Echo indisponible'}
         </div>
       )}
 

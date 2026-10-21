@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>ca.govern-ai.echo-f5tts</string>
+  <key>ProgramArguments</key><array>
+    <string>/Users/pharos_ai/.local/share/f5tts/.venv/bin/python</string>
+    <string>/Users/pharos_ai/.local/share/f5tts/server.py</string>
+  </array>
+  <key>WorkingDirectory</key><string>/Users/pharos_ai/.local/share/f5tts</string>
+  <key>RunAtLoad</key><false/>
+  <key>KeepAlive</key><false/>
+  <key>Disabled</key><true/>
+  <key>StandardOutPath</key><string>/Users/pharos_ai/.local/share/f5tts/server.log</string>
+  <key>StandardErrorPath</key><string>/Users/pharos_ai/.local/share/f5tts/server.log</string>
+</dict></plist>
