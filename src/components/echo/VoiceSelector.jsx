@@ -1,7 +1,7 @@
 import { Check, ChevronDown, Volume2, RefreshCw } from 'lucide-react';
 import { Button, Menu, MenuItem, MenuLabel, MenuSeparator } from '@/components/ui/primitives';
 
-/** Echo speaks with exactly two voices, both rendered by F5-TTS through the Worker. */
+/** Echo speaks with exactly two voices, both rendered by XTTS-v2 through the Worker. */
 export default function VoiceSelector({ voices, selectedVoiceId, selectedVoice, onSelect, voiceStatus, onRetry }) {
   const unavailable = voiceStatus === 'unavailable';
   return (

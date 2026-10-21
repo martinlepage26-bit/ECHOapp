@@ -1,4 +1,4 @@
-/** Echo voice: proxy to the F5-TTS origin behind a Cloudflare Access-protected tunnel. */
+/** Echo voice: proxy to the local voice origin (XTTS-v2 default, F5-TTS optional) behind a Cloudflare Access-protected tunnel. */
 
 const json = (body, status = 200) =>
   new Response(JSON.stringify(body), {
@@ -6,10 +6,13 @@ const json = (body, status = 200) =>
     headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' },
   });
 
-/* ── Echo voice (F5-TTS via protected tunnel) ───────────────────────── */
+/* ── Echo voice (XTTS-v2 default, via protected tunnel) ───────────────────────── */
 
 export const VOICES = new Set(['echo', 'martin']);
-export const ENGINES = new Set(['f5', 'xtts']);
+export const ENGINES = new Set(['xtts', 'f5']);
+export const DEFAULT_ENGINE = 'xtts';
+export const LANGS = new Set(['fr', 'en']);
+const engineOf = (env) => (ENGINES.has(env.TTS_ENGINE) ? env.TTS_ENGINE : DEFAULT_ENGINE);
 const TTS_MAX_CHARS = 600;
 const TTS_DEFAULT_TIMEOUT_MS = 60_000;
 export const VOICE_UNAVAILABLE = 'Voix Echo indisponible pour le moment. / Echo voice unavailable right now.';
@@ -44,7 +47,9 @@ export async function handleTts(request, env) {
   if (!text) return json({ error: 'No text given.' }, 400);
   if (Array.from(text).length > TTS_MAX_CHARS) return json({ error: 'Text too long for one clip.' }, 413);
   if (!VOICES.has(voice)) return json({ error: 'Unknown voice.' }, 400);
-  const engine = ENGINES.has(env.TTS_ENGINE) ? env.TTS_ENGINE : 'f5';
+  const lang = body?.lang ?? 'fr';
+  if (!LANGS.has(lang)) return json({ error: 'Unsupported language.' }, 400);
+  const engine = engineOf(env);
 
   const up = ttsUpstream(env);
   if (up.error) return unavailable(up.error);
@@ -53,7 +58,7 @@ export async function handleTts(request, env) {
   try {
     response = await fetch(`${up.base}/tts`, {
       method: 'POST', headers: up.headers, redirect: 'manual',
-      body: JSON.stringify({ text, voice, engine }),
+      body: JSON.stringify({ text, voice, engine, lang }),
       signal: AbortSignal.timeout(timeout),
     });
   } catch (e) {
@@ -74,7 +79,7 @@ export async function handleTtsHealth(env) {
     const r = await fetch(`${up.base}/health`, { headers: up.headers, redirect: 'manual', signal: AbortSignal.timeout(5000) });
     if (!r.ok) return unavailable(`upstream_${r.status}`);
     const data = await r.json().catch(() => ({}));
-    return json({ ready: !!data.ready, voices: [...VOICES], engine: ENGINES.has(env.TTS_ENGINE) ? env.TTS_ENGINE : 'f5' });
+    return json({ ready: !!data.ready, voices: [...VOICES], engine: engineOf(env) });
   } catch (e) {
     return unavailable(e?.name === 'TimeoutError' ? 'timeout' : 'unreachable');
   }

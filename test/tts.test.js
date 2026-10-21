@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import worker from '../worker/index.js';
 import { VOICE_UNAVAILABLE } from '../worker/tts.js';
 
-const ENV = { TTS_UPSTREAM: 'https://f5tts.example', TTS_ENGINE: 'f5', CF_ACCESS_CLIENT_ID: 'id-x', CF_ACCESS_CLIENT_SECRET: 'secret-x', TTS_TIMEOUT_MS: '50' };
+const ENV = { TTS_UPSTREAM: 'https://tts.example', TTS_ENGINE: 'xtts', CF_ACCESS_CLIENT_ID: 'id-x', CF_ACCESS_CLIENT_SECRET: 'secret-x', TTS_TIMEOUT_MS: '50' };
 const tts = (body) => new Request('https://reader.example/echo/api/tts', {
   method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
 });
@@ -17,10 +17,10 @@ test('proxies to the tunnel with Access service-token headers and returns audio'
   const r = await worker.fetch(tts({ text: 'Bonjour.', voice: 'martin' }), ENV);
   assert.equal(r.status, 200);
   assert.equal(r.headers.get('content-type'), 'audio/wav');
-  assert.equal(seen.url, 'https://f5tts.example/tts');
+  assert.equal(seen.url, 'https://tts.example/tts');
   assert.equal(seen.init.headers['CF-Access-Client-Id'], 'id-x');
   assert.equal(seen.init.headers['CF-Access-Client-Secret'], 'secret-x');
-  assert.deepEqual(JSON.parse(seen.init.body), { text: 'Bonjour.', voice: 'martin', engine: 'f5' });
+  assert.deepEqual(JSON.parse(seen.init.body), { text: 'Bonjour.', voice: 'martin', engine: 'xtts', lang: 'fr' });
 });
 
 test('defaults to the echo voice and rejects voices outside the allowlist', async (t) => {
@@ -65,7 +65,7 @@ test('missing Access secret fails closed without contacting the origin', async (
     assert.equal((await r.json()).error, VOICE_UNAVAILABLE);
   }
   // A public origin is never reachable unauthenticated, even with the local dev flag.
-  assert.equal((await worker.fetch(tts({ text: 'Hi.' }), { TTS_UPSTREAM: 'https://f5tts.example', TTS_ALLOW_LOCAL_UNAUTHENTICATED: '1' })).status, 503);
+  assert.equal((await worker.fetch(tts({ text: 'Hi.' }), { TTS_UPSTREAM: 'https://tts.example', TTS_ALLOW_LOCAL_UNAUTHENTICATED: '1' })).status, 503);
   assert.equal(f.mock.callCount(), 0);
 });
 
@@ -92,4 +92,25 @@ test('the UI has no browser speechSynthesis fallback left', () => {
   for (const f of files) {
     assert.doesNotMatch(readFileSync(f, 'utf8'), /speechSynthesis|SpeechSynthesis/, f);
   }
+});
+
+test('engine defaults to xtts when unset or unknown; f5 stays selectable by config', async (t) => {
+  const bodies = [];
+  t.mock.method(globalThis, 'fetch', async (_u, init) => { bodies.push(JSON.parse(init.body)); return wav(); });
+  const { TTS_ENGINE: _drop, ...noEngine } = ENV;
+  await worker.fetch(tts({ text: 'Salut.' }), noEngine);
+  await worker.fetch(tts({ text: 'Salut.' }), { ...ENV, TTS_ENGINE: 'bogus' });
+  const r = await worker.fetch(tts({ text: 'Salut.', voice: 'martin' }), { ...ENV, TTS_ENGINE: 'f5' });
+  assert.deepEqual(bodies.map((b) => b.engine), ['xtts', 'xtts', 'f5']);
+  assert.equal(r.headers.get('x-echo-engine'), 'f5');
+  assert.equal(r.headers.get('x-echo-voice'), 'martin');
+});
+
+test('passes lang (fr default, en allowed) and rejects other languages', async (t) => {
+  const bodies = [];
+  const f = t.mock.method(globalThis, 'fetch', async (_u, init) => { bodies.push(JSON.parse(init.body)); return wav(); });
+  await worker.fetch(tts({ text: 'Hello.', voice: 'echo', lang: 'en' }), ENV);
+  assert.equal(bodies[0].lang, 'en');
+  assert.equal((await worker.fetch(tts({ text: 'Hallo.', lang: 'de' }), ENV)).status, 400);
+  assert.equal(f.mock.callCount(), 1);
 });

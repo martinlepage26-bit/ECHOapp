@@ -1,0 +1,10 @@
+# ~/.cloudflared/echo-tts.yml  (tunnel UUID filled in after `cloudflared tunnel create echo-tts`)
+tunnel: <TUNNEL_UUID>
+credentials-file: /Users/pharos_ai/.cloudflared/<TUNNEL_UUID>.json
+ingress:
+  - hostname: tts.govern-ai.ca
+    service: http://127.0.0.1:8765
+    originRequest:
+      httpHostHeader: tts.govern-ai.ca
+      connectTimeout: 10s
+  - service: http_status:404

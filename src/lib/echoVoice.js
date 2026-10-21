@@ -1,4 +1,4 @@
-/** The only voices ECHO speaks with. Both are rendered by F5-TTS via the Worker. */
+/** The only voices ECHO speaks with. Both are rendered by the local XTTS-v2 backend via the Worker. */
 export const ECHO_VOICES = [
   { id: 'echo', name: 'Echo', lang: 'fr/en', description: 'Original Echo voice' },
   { id: 'martin', name: 'Martin', lang: 'fr/en', description: 'Martin (new reference)' },
@@ -60,11 +60,12 @@ export async function checkEchoVoice() {
   return data;
 }
 
-export function makeRenderer(voice) {
+export function makeRenderer(voice, lang = 'fr') {
+  const speakLang = lang === 'en' ? 'en' : 'fr';
   if (!ECHO_VOICES.some((v) => v.id === voice)) throw new Error('Unknown voice.');
   return async function renderClip(text, signal) {
     const timeout = AbortSignal.timeout(90000);
-    const response = await request('', { body: { text, voice }, signal: AbortSignal.any([signal, timeout]) });
+    const response = await request('', { body: { text, voice, lang: speakLang }, signal: AbortSignal.any([signal, timeout]) });
     if (!(response.headers.get('content-type') || '').startsWith('audio/')) throw new Error(VOICE_UNAVAILABLE);
     return response.arrayBuffer();
   };
@@ -85,7 +86,7 @@ function waitForBuffer(milliseconds, signal) {
   });
 }
 
-/** One browser audio owner. Each clip is rendered by F5-TTS through the Worker. */
+/** One browser audio owner. Each clip is rendered by the Worker voice backend (XTTS-v2 by default). */
 export function createEchoPlayer({ render = makeRenderer(DEFAULT_VOICE), makeContext = () => new window.AudioContext(),
   now = () => performance.now(), wait = waitForBuffer } = {}) {
   let context, source, controller, release, paused = false, generation = 0;

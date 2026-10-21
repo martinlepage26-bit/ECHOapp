@@ -114,7 +114,7 @@ export function useSpeech() {
   // Held in a ref so the utterance callbacks always see current settings
   // without tearing down playback on every rate or voice change.
   const settingsRef = useRef({});
-  settingsRef.current = { rate, selectedVoice, sentences, spokenFor, langCode, render: makeRenderer(selectedVoice.id) };
+  settingsRef.current = { rate, selectedVoice, sentences, spokenFor, langCode, render: makeRenderer(selectedVoice.id, langCode) };
 
   const speakFrom = useCallback((startIndex) => {
     hardStop();

@@ -17,10 +17,11 @@ zone_name = "govern-ai.ca"
 pattern = "martin.govern-ai.ca/echo/*"
 zone_name = "govern-ai.ca"
 
-# Echo voice. The F5-TTS origin sits behind a Cloudflare Access-protected tunnel.
+# Echo voice. The XTTS-v2 origin (deploy/xtts/server.py) sits behind a Cloudflare Access-protected tunnel.
+# TTS_ENGINE = "xtts" (default) or "f5" (deploy/f5tts, optional, removable).
 # Secrets (set with `wrangler secret put`, never committed):
 #   CF_ACCESS_CLIENT_ID, CF_ACCESS_CLIENT_SECRET
 [vars]
-TTS_UPSTREAM = "https://f5tts.govern-ai.ca"
-TTS_ENGINE = "f5"
+TTS_UPSTREAM = "https://tts.govern-ai.ca"
+TTS_ENGINE = "xtts"
 TTS_TIMEOUT_MS = "60000"

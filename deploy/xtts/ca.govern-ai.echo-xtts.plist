@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>ca.govern-ai.echo-xtts</string>
+  <key>ProgramArguments</key><array>
+    <string>/Users/pharos_ai/.local/share/echo-voice/.venv-torch28/bin/python</string>
+    <string>/Users/pharos_ai/work/ECHOapp/deploy/xtts/server.py</string>
+  </array>
+  <key>EnvironmentVariables</key><dict>
+    <key>COQUI_TOS_AGREED</key><string>1</string>
+    <key>PYTORCH_ENABLE_MPS_FALLBACK</key><string>1</string>
+    <key>TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD</key><string>1</string>
+  </dict>
+  <key>RunAtLoad</key><false/>
+  <key>KeepAlive</key><false/>
+  <key>Disabled</key><true/>
+  <key>StandardOutPath</key><string>/Users/pharos_ai/.local/share/echo-voice/xtts-endpoint.log</string>
+  <key>StandardErrorPath</key><string>/Users/pharos_ai/.local/share/echo-voice/xtts-endpoint.log</string>
+</dict></plist>
