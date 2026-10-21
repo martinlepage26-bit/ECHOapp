@@ -27,9 +27,9 @@ TTS_UPSTREAM = "https://tts.govern-ai.ca"
 TTS_ENGINE = "xtts"
 TTS_TIMEOUT_MS = "60000"
 TTS_RATE_PER_MIN = "30"
-ACCESS_TEAM_DOMAIN = ""      # e.g. "<team>.cloudflareaccess.com"
-ACCESS_AUD = ""              # AUD tag of the Access app on martin.govern-ai.ca/echo
-ACCESS_ALLOWED_EMAILS = ""   # comma-separated, e.g. Martin's sign-in email
+ACCESS_TEAM_DOMAIN = "pharos-ai.cloudflareaccess.com"
+ACCESS_AUD = "6b255a35383b086a506393d5400da850857002c5e62d27b67a425965bcaef1dd"   # Access app "Echo (martin.govern-ai.ca/echo)" 8b0060cc
+ACCESS_ALLOWED_EMAILS = "martinlepage26@me.com"
 
 # Optional: Workers rate-limiting binding (used instead of the per-isolate counter when bound).
 # [[ratelimits]]
