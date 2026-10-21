@@ -9,6 +9,9 @@
  *     first-party instead, with the guards a server-side fetcher needs.
  */
 
+import { handleTts, handleTtsHealth } from './tts.js';
+import { guardTts } from './access.js';
+
 const MOUNT = '/echo';
 const MAX_BYTES = 3 * 1024 * 1024;
 const FETCH_TIMEOUT_MS = 12_000;
@@ -220,6 +223,18 @@ export default {
     if (url.pathname === `${MOUNT}/api/extract` || url.pathname === '/api/extract') {
       if (request.method !== 'GET') return json({ error: 'Use GET.' }, 405);
       return handleExtract(request);
+    }
+
+    if (url.pathname === `${MOUNT}/api/tts` || url.pathname === '/api/tts') {
+      if (request.method !== 'POST') return json({ error: 'Use POST.' }, 405);
+      const denied = await guardTts(request, env);
+      if (denied) return denied;
+      return handleTts(request, env);
+    }
+    if (url.pathname === `${MOUNT}/api/tts/health` || url.pathname === '/api/tts/health') {
+      const denied = await guardTts(request, env);
+      if (denied) return denied;
+      return handleTtsHealth(env);
     }
 
     // The bundle is built with its assets at /assets/…, so strip the mount

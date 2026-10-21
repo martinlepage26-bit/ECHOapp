@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { setImmediate } from 'node:timers/promises';
-import { packVoiceClips, createPharosPlayer, initialBufferDelay, START_CLIP_CHARS, CLIP_CHARS } from '../src/lib/pharosVoice.js';
+import { packVoiceClips, createEchoPlayer, initialBufferDelay, START_CLIP_CHARS, CLIP_CHARS } from '../src/lib/echoVoice.js';
 
 function setup(render, extra = {}) {
   const events = [], sources = [];
@@ -14,7 +14,7 @@ function setup(render, extra = {}) {
       sources.push(source); return source;
     },
   };
-  const player = createPharosPlayer({ render, makeContext: () => context, ...extra });
+  const player = createEchoPlayer({ render, makeContext: () => context, ...extra });
   const settings = { current: { sentences: [{ text: 'Hello Martin.' }], spokenFor: (s) => ({ spoken: s.text }), rate: 1 } };
   const callbacks = {
     onSentence: (n) => events.push(`sentence:${n}`), onStatus: (s) => events.push(s),
@@ -176,4 +176,22 @@ test('lookahead cannot let the third phrase overtake the second in the model que
   finishSecond(new ArrayBuffer(4)); await setImmediate();
   assert.deepEqual(texts, ['Hello Martin.', 'Second sentence.', 'Third sentence.']);
   s.player.cancel();
+});
+
+test('renderer posts the chosen voice and language to the Worker', async (t) => {
+  const { makeRenderer } = await import('../src/lib/echoVoice.js');
+  const bodies = [];
+  t.mock.method(globalThis, 'fetch', async (_u, init) => {
+    bodies.push(JSON.parse(init.body));
+    return new Response(new Uint8Array([1]), { headers: { 'content-type': 'audio/wav' } });
+  });
+  await makeRenderer('martin', 'fr')('Bonjour.', new AbortController().signal);
+  await makeRenderer('echo', 'en')('Hello.', new AbortController().signal);
+  await makeRenderer('echo', 'es')('Hola.', new AbortController().signal);
+  assert.deepEqual(bodies, [
+    { text: 'Bonjour.', voice: 'martin', lang: 'fr' },
+    { text: 'Hello.', voice: 'echo', lang: 'en' },
+    { text: 'Hola.', voice: 'echo', lang: 'fr' },
+  ]);
+  assert.throws(() => makeRenderer('patricia'), /Unknown voice/);
 });

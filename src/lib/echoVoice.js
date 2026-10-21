@@ -1,7 +1,11 @@
-export const PHAROS_ORIGIN = 'http://127.0.0.1:8787';
-export const PHAROS_VOICE = {
-  id: 'pharos-echo', name: 'PHAROS · Echo', lang: 'en', local: true, pharos: true,
-};
+/** The only voices ECHO speaks with. Both are rendered by the local XTTS-v2 backend via the Worker. */
+export const ECHO_VOICES = [
+  { id: 'echo', name: 'Echo', lang: 'fr/en', description: 'Original Echo voice' },
+  { id: 'martin', name: 'Martin', lang: 'fr/en', description: 'Martin (new reference)' },
+];
+export const DEFAULT_VOICE = 'echo';
+export const VOICE_UNAVAILABLE = 'Echo voice unavailable · Voix Echo indisponible';
+const API = `${typeof window !== 'undefined' && window.location?.pathname?.startsWith('/echo') ? '/echo' : ''}/api/tts`;
 
 // Give the engine a natural phrase and enough playing time to prepare the next.
 // Tiny clips repeatedly pay the model's setup cost and create gaps.
@@ -31,42 +35,40 @@ export function packVoiceClips(text, limit = CLIP_CHARS, firstLimit = limit) {
   return clips.filter(Boolean);
 }
 
-async function request(path, { signal, text } = {}) {
+async function request(path, { signal, body } = {}) {
   let response;
   try {
-    response = await fetch(`${PHAROS_ORIGIN}/api/pharos/${path}`, {
-      method: text === undefined ? 'GET' : 'POST',
-      headers: { 'X-Echo-Client': 'echo-reader', ...(text === undefined ? {} : { 'Content-Type': 'application/json' }) },
-      body: text === undefined ? undefined : JSON.stringify({ text }),
-      signal, credentials: 'omit', cache: 'no-store', redirect: 'error',
+    response = await fetch(`${API}${path}`, {
+      method: body === undefined ? 'GET' : 'POST',
+      headers: body === undefined ? {} : { 'Content-Type': 'application/json' },
+      body: body === undefined ? undefined : JSON.stringify(body),
+      signal, credentials: 'same-origin', cache: 'no-store', redirect: 'error',
     });
   } catch (error) {
     if (signal?.aborted) throw error;
-    throw new Error('Cannot reach PHAROS on this Mac. Start the ECHO local companion and allow its local connection in your browser.');
+    throw new Error(VOICE_UNAVAILABLE);
   }
-  if (!response.ok) {
-    const detail = await response.json().catch(() => ({}));
-    throw new Error(detail.error || 'PHAROS voice is unavailable on this Mac.');
-  }
+  if (!response.ok) throw new Error(VOICE_UNAVAILABLE);
   return response;
 }
 
-export async function connectPharos() {
-  const response = await request('health', { signal: AbortSignal.timeout(5000) });
-  const data = await response.json();
-  if (data.service !== 'echo-pharos-companion' || !data.ready || data.voice !== 'pharos-echo') {
-    throw new Error('PHAROS’s pinned Echo voice is not ready. Start PHAROS’s voice service, then reconnect.');
-  }
+/** Fail closed: anything but a ready answer means the voice is unavailable. */
+export async function checkEchoVoice() {
+  const response = await request('/health', { signal: AbortSignal.timeout(6000) });
+  const data = await response.json().catch(() => ({}));
+  if (!data.ready) throw new Error(VOICE_UNAVAILABLE);
   return data;
 }
 
-async function renderClip(text, signal) {
-  const timeout = AbortSignal.timeout(180000);
-  const response = await request('speak', { text, signal: AbortSignal.any([signal, timeout]) });
-  if (!(response.headers.get('content-type') || '').startsWith('audio/wav')) {
-    throw new Error('PHAROS returned no playable audio.');
-  }
-  return response.arrayBuffer();
+export function makeRenderer(voice, lang = 'fr') {
+  const speakLang = lang === 'en' ? 'en' : 'fr';
+  if (!ECHO_VOICES.some((v) => v.id === voice)) throw new Error('Unknown voice.');
+  return async function renderClip(text, signal) {
+    const timeout = AbortSignal.timeout(90000);
+    const response = await request('', { body: { text, voice, lang: speakLang }, signal: AbortSignal.any([signal, timeout]) });
+    if (!(response.headers.get('content-type') || '').startsWith('audio/')) throw new Error(VOICE_UNAVAILABLE);
+    return response.arrayBuffer();
+  };
 }
 
 export function initialBufferDelay(renderSeconds, chars, nextChars, duration, rate) {
@@ -84,8 +86,8 @@ function waitForBuffer(milliseconds, signal) {
   });
 }
 
-/** One browser audio owner. The companion reuses PHAROS's resident model. */
-export function createPharosPlayer({ render = renderClip, makeContext = () => new window.AudioContext(),
+/** One browser audio owner. Each clip is rendered by the Worker voice backend (XTTS-v2 by default). */
+export function createEchoPlayer({ render = makeRenderer(DEFAULT_VOICE), makeContext = () => new window.AudioContext(),
   now = () => performance.now(), wait = waitForBuffer } = {}) {
   let context, source, controller, release, paused = false, generation = 0;
   let callbacks, position = 0, total = 1, clipDuration = 0, clipStart = 0, rate = 1;
@@ -138,7 +140,7 @@ export function createPharosPlayer({ render = renderClip, makeContext = () => ne
             if (earlier?.error) return earlier;
             if (run !== generation) return {};
             const startedAt = now();
-            const bytes = await render(clip.text, signal);
+            const bytes = await (settings.current.render || render)(clip.text, signal);
             if (run !== generation) return {};
             const renderSeconds = (now() - startedAt) / 1000;
             return { buffer: await context.decodeAudioData(bytes), renderSeconds };
@@ -190,7 +192,7 @@ export function createPharosPlayer({ render = renderClip, makeContext = () => ne
           cb.onStatus('playing');
           source.start();
           // Bank a little audio when synthesis is faster than playback. The
-          // companion serializes model work, and Stop aborts both requests.
+          // voice server serializes model work, and Stop aborts both requests.
           fillUpcoming();
           pending = upcoming.shift();
           await ended;
@@ -201,7 +203,7 @@ export function createPharosPlayer({ render = renderClip, makeContext = () => ne
       })().catch((error) => {
         if (run !== generation) return;
         cancel();
-        cb.onError(error.name === 'TimeoutError' ? 'PHAROS took too long to render. Try a shorter passage.' : error.message);
+        cb.onError(error.name === 'TimeoutError' ? VOICE_UNAVAILABLE : error.message);
       });
     },
     pause() {
