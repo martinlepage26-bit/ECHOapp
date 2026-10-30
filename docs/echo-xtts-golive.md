@@ -77,3 +77,16 @@ Rollback: `npx wrangler rollback 01038eb5-a267-4446-9889-f5f87460e95f --name ech
 ## Undo
 `wrangler rollback` (above); delete the `tts.govern-ai.ca` DNS record in the dashboard; `cloudflared tunnel delete echo-tts`;
 `launchctl bootout gui/$(id -u)/ca.govern-ai.echo-xtts`.
+
+## Secret writes and plain vars (diagnosis 2026-10-21)
+- Argus saw the live version `2cb8f5c7` with no plain vars (`TTS_UPSTREAM`, `ACCESS_*`). Nothing was stripped.
+  Version `01038eb5` (2026-10-17, built from main before PR #3) never had a `[vars]` block. Every secret write
+  (`1c00e3f5` and `f3aa5573` by API, `2cb8f5c7` by `wrangler secret put`) copied the live version's bindings and
+  added one secret. The vars first appear when the new code is deployed with `npm run deploy`, which reads `wrangler.toml`.
+- Each secret write deploys a new live version straight away, one version per secret.
+- Rules for future writes:
+  1. Prefer `npx wrangler secret put NAME --name echo < file` on the Mac. It keeps the existing bindings.
+  2. If you use the API, use `PUT /accounts/{id}/workers/scripts/echo/secrets`. It keeps the other bindings.
+     Never re-upload the script or settings with a partial `bindings` list; that drops vars and assets.
+  3. To change secrets without going live, use `npx wrangler versions secret put NAME --name echo`, then deploy the version.
+  4. After any write, list binding names, never values, for example with `GET .../workers/scripts/echo/versions/{id}`. Check that `ASSETS` and the expected vars are present.
